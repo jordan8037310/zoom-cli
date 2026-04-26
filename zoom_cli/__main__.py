@@ -4,7 +4,8 @@ import questionary
 from click_default_group import DefaultGroup
 
 from zoom_cli import auth
-from zoom_cli.api import oauth
+from zoom_cli.api import oauth, users
+from zoom_cli.api.client import ApiClient, ZoomApiError
 from zoom_cli.commands import (
     _edit,
     _launch_name,
@@ -235,6 +236,42 @@ def status():
 def logout():
     auth.clear_s2s_credentials()
     click.echo("Cleared Server-to-Server OAuth credentials.")
+
+
+# ---- Zoom Users REST API -------------------------------------------------
+
+
+@main.group("users", help="Zoom Users API (https://developers.zoom.us/docs/api/users/).")
+def users_cmd():
+    """Group for ``zoom users ...``."""
+
+
+@users_cmd.command("me", help="Print the authenticated user's profile (GET /users/me).")
+def users_me():
+    creds = auth.load_s2s_credentials()
+    if creds is None:
+        click.echo("No Server-to-Server OAuth credentials saved. Run `zoom auth s2s set` first.")
+        raise click.exceptions.Exit(code=1)
+
+    try:
+        with ApiClient(creds) as client:
+            profile = users.get_me(client)
+    except oauth.ZoomAuthError as exc:
+        click.echo(f"Authentication failed (HTTP {exc.status_code}): {exc}")
+        raise click.exceptions.Exit(code=1) from exc
+    except ZoomApiError as exc:
+        click.echo(f"Zoom API error (HTTP {exc.status_code}): {exc}")
+        raise click.exceptions.Exit(code=1) from exc
+    except httpx.HTTPError as exc:
+        click.echo(f"Could not reach Zoom API: {exc}")
+        raise click.exceptions.Exit(code=1) from exc
+
+    # Print a few well-known fields. The full payload is many dozen
+    # fields; users who want all of them can pipe the underlying call
+    # through `jq` once we add `--json` (out of scope for this PR).
+    for field in ("display_name", "email", "id", "account_id", "type", "status"):
+        if field in profile:
+            click.echo(f"{field}: {profile[field]}")
 
 
 if __name__ == "__main__":
