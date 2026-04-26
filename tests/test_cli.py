@@ -88,11 +88,87 @@ def test_save_url_does_not_prompt_for_password_when_pwd_in_url(
 def test_rm_with_argument_no_prompt(
     runner: CliRunner, write_meetings, tmp_zoom_cli_home: Path
 ) -> None:
+    """Regression: `zoom rm <name>` with a positional name must NOT prompt
+    for confirmation — that would break existing scripts and aliases."""
     write_meetings({"a": {"id": "1"}, "b": {"id": "2"}})
     result = runner.invoke(main, ["rm", "a"])
     assert result.exit_code == 0, result.output
     on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
     assert on_disk == {"b": {"id": "2"}}
+
+
+def test_rm_dry_run_does_not_modify_file(
+    runner: CliRunner, write_meetings, tmp_zoom_cli_home: Path
+) -> None:
+    write_meetings({"a": {"id": "1"}, "b": {"id": "2"}})
+    result = runner.invoke(main, ["rm", "a", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "[dry-run]" in result.output
+    assert "a" in result.output
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    assert on_disk == {"a": {"id": "1"}, "b": {"id": "2"}}
+
+
+def test_rm_interactive_dry_run_does_not_confirm_or_delete(
+    runner: CliRunner,
+    write_meetings,
+    tmp_zoom_cli_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`zoom rm --dry-run` (no positional name): pick from list, print the
+    preview, return without firing the confirmation prompt."""
+    import zoom_cli.__main__ as main_mod
+
+    write_meetings({"alpha": {"id": "1"}, "beta": {"id": "2"}})
+    monkeypatch.setattr(main_mod.questionary, "select", _FakeQ(["alpha"]))
+
+    result = runner.invoke(main, ["rm", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "[dry-run]" in result.output
+    assert "alpha" in result.output
+    assert "Remove meeting" not in result.output  # confirm prompt did NOT fire
+
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    assert on_disk == {"alpha": {"id": "1"}, "beta": {"id": "2"}}
+
+
+def test_rm_interactive_confirms_before_deleting(
+    runner: CliRunner,
+    write_meetings,
+    tmp_zoom_cli_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the name is picked interactively (no positional arg), a
+    confirmation prompt must fire. Answering 'n' must abort."""
+    import zoom_cli.__main__ as main_mod
+
+    write_meetings({"a": {"id": "1"}})
+    monkeypatch.setattr(main_mod.questionary, "select", _FakeQ(["a"]))
+
+    # Click's prompt reads from stdin; feed 'n\n' to decline.
+    result = runner.invoke(main, ["rm"], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    # Meeting still present.
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    assert "a" in on_disk
+
+
+def test_rm_interactive_with_yes_flag_skips_confirmation(
+    runner: CliRunner,
+    write_meetings,
+    tmp_zoom_cli_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import zoom_cli.__main__ as main_mod
+
+    write_meetings({"a": {"id": "1"}})
+    monkeypatch.setattr(main_mod.questionary, "select", _FakeQ(["a"]))
+
+    result = runner.invoke(main, ["rm", "--yes"])
+    assert result.exit_code == 0, result.output
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    assert "a" not in on_disk
 
 
 def test_default_launch_with_url_argument(
