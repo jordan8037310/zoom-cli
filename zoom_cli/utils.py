@@ -1,59 +1,99 @@
-import os
+from __future__ import annotations
+
 import json
+import os
+import shutil
 import subprocess
 
 __version__ = "1.1.6"
 
 ZOOM_CLI_DIR = os.path.expanduser("~/.zoom-cli")
-SAVE_FILE_PATH = "{}/meetings.json".format(ZOOM_CLI_DIR)
+SAVE_FILE_PATH = f"{ZOOM_CLI_DIR}/meetings.json"
+
 
 # adopted from: https://stackoverflow.com/questions/8924173/how-do-i-print-bold-text-in-python
 class ConsoleColor:
-   PURPLE = '\033[95m'
-   CYAN = '\033[96m'
-   DARKCYAN = '\033[36m'
-   BLUE = '\033[94m'
-   GREEN = '\033[92m'
-   YELLOW = '\033[93m'
-   RED = '\033[91m'
-   BOLD = '\033[1m'
-   UNDERLINE = '\033[4m'
-   END = '\033[0m'
+    PURPLE = "\033[95m"
+    CYAN = "\033[96m"
+    DARKCYAN = "\033[36m"
+    BLUE = "\033[94m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    BOLD = "\033[1m"
+    UNDERLINE = "\033[4m"
+    END = "\033[0m"
 
-def dict_to_json_string(dict):
+
+def _ensure_storage() -> None:
+    """Create the storage dir and empty meetings file on first use.
+
+    Done lazily so tests can monkeypatch the paths before any storage call.
+    """
+    if not os.path.isdir(ZOOM_CLI_DIR):
+        os.makedirs(ZOOM_CLI_DIR)
+    if not os.path.exists(SAVE_FILE_PATH):
+        with open(SAVE_FILE_PATH, "w") as file:
+            file.write("{}")
+
+
+def dict_to_json_string(data) -> str:
     def dumper(obj):
         try:
             return obj.toJSON()
-        except:
+        except AttributeError:
             return obj.__dict__
 
-    return json.dumps(dict, default=dumper, indent=2)
+    return json.dumps(data, default=dumper, indent=2)
 
-def get_meeting_file_contents():
+
+def get_meeting_file_contents() -> dict:
     try:
-        with open(SAVE_FILE_PATH, "r") as file:
+        with open(SAVE_FILE_PATH) as file:
             return json.loads(file.read())
-    except:
+    except (OSError, json.JSONDecodeError):
         return {}
 
-def get_meeting_names():
+
+def get_meeting_names() -> list[str]:
     return sorted(get_meeting_file_contents().keys())
 
-def write_to_meeting_file(contents):
+
+def write_to_meeting_file(contents: dict) -> None:
+    _ensure_storage()
     with open(SAVE_FILE_PATH, "w") as file:
         file.write(dict_to_json_string(contents))
 
-def is_command_available(command):
-    s = subprocess.Popen("command -v {}".format(command), shell=True, stdout=subprocess.PIPE)
-    output = s.stdout.read().decode("utf-8")
-    return len(output) > 0
 
-def launch_zoommtg_url(url, password=""):
+def is_command_available(command: str) -> bool:
+    """Return True if `command` is on PATH."""
+    return shutil.which(command) is not None
+
+
+class LauncherUnavailableError(RuntimeError):
+    """Neither `open` nor `xdg-open` is available on PATH."""
+
+
+def launch_zoommtg_url(url: str, password: str = "") -> None:
+    """Launch the Zoom desktop client for ``url``.
+
+    Uses argv-list ``subprocess.run`` (not the shell) so that meeting URLs and
+    passwords containing shell metacharacters (``"``, `` ` ``, ``$``, ``;``)
+    cannot be interpreted as shell syntax. Closes #4.
+    """
     decorator = "?" if "?" not in url else "&"
-    url_to_launch = url + "{}pwd={}".format(decorator, password) if password else url
-    command = "open" if is_command_available("open") else "xdg-open"
-    os.system('{} "{}"'.format(command, url_to_launch))
+    url_to_launch = f"{url}{decorator}pwd={password}" if password else url
+    cmd = shutil.which("open") or shutil.which("xdg-open")
+    if cmd is None:
+        raise LauncherUnavailableError(
+            "Neither `open` nor `xdg-open` was found on PATH; cannot launch Zoom."
+        )
+    # Argv-list form (no shell) — `cmd` comes from shutil.which (literal
+    # "open"/"xdg-open") and `url_to_launch` is passed as an argv arg, never
+    # interpreted as shell syntax. S603 is a generic subprocess warning.
+    subprocess.run([cmd, url_to_launch], check=False)  # noqa: S603
 
-def launch_zoommtg(id, password):
+
+def launch_zoommtg(id: str, password: str) -> None:
     url = "zoommtg://zoom.us/join?confno=" + id
     launch_zoommtg_url(url, password)

@@ -76,6 +76,7 @@ celerybeat-schedule
 
 # virtualenv
 venv/
+.venv/
 ENV/
 
 # Spyder project settings
@@ -87,3 +88,14 @@ ENV/
 # MacOS
 .DS_Store
 .vscode
+
+# Tooling caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# Local Claude state
+.claude/
+
+# Coverage outputs
+coverage.xml
