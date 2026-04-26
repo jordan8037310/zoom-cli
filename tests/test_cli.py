@@ -64,13 +64,17 @@ def test_save_url_via_flags(runner: CliRunner, tmp_zoom_cli_home: Path) -> None:
 
 
 def test_save_id_password_via_flags(runner: CliRunner, tmp_zoom_cli_home: Path) -> None:
+    """Password lands in keyring, not in meetings.json."""
+    from zoom_cli import secrets
+
     result = runner.invoke(
         main,
         ["save", "-n", "standup", "--id", "1234567890", "-p", "pw"],
     )
     assert result.exit_code == 0, result.output
     on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
-    assert on_disk == {"standup": {"id": "1234567890", "password": "pw"}}
+    assert on_disk == {"standup": {"id": "1234567890"}}
+    assert secrets.get_password("standup") == "pw"
 
 
 def test_save_url_does_not_prompt_for_password_when_pwd_in_url(
