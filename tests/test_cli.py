@@ -158,6 +158,100 @@ def test_rm_interactive_confirms_before_deleting(
     assert "a" in on_disk
 
 
+# ---- zoom auth subcommand group (issue #11) -----------------------------
+
+
+def test_auth_status_when_not_configured(runner: CliRunner) -> None:
+    result = runner.invoke(main, ["auth", "status"])
+    assert result.exit_code == 0, result.output
+    assert "not configured" in result.output
+
+
+def test_auth_s2s_set_with_flags_persists_to_keyring(runner: CliRunner) -> None:
+    from zoom_cli import auth
+
+    result = runner.invoke(
+        main,
+        [
+            "auth",
+            "s2s",
+            "set",
+            "--account-id",
+            "acc-1",
+            "--client-id",
+            "cid-2",
+            "--client-secret",
+            "csecret-3",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "saved" in result.output.lower()
+
+    loaded = auth.load_s2s_credentials()
+    assert loaded is not None
+    assert loaded.account_id == "acc-1"
+    assert loaded.client_id == "cid-2"
+    assert loaded.client_secret == "csecret-3"
+
+
+def test_auth_status_when_configured(runner: CliRunner) -> None:
+    from zoom_cli import auth
+
+    auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
+    result = runner.invoke(main, ["auth", "status"])
+    assert result.exit_code == 0, result.output
+    assert "configured" in result.output
+    assert "not configured" not in result.output
+
+
+def test_auth_logout_clears_keyring(runner: CliRunner) -> None:
+    from zoom_cli import auth
+
+    auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
+    assert auth.has_s2s_credentials() is True
+
+    result = runner.invoke(main, ["auth", "logout"])
+    assert result.exit_code == 0, result.output
+    assert "Cleared" in result.output
+
+    assert auth.has_s2s_credentials() is False
+
+
+def test_auth_s2s_set_does_not_echo_secret_in_output(runner: CliRunner) -> None:
+    """Regression: the success message must not echo the secret."""
+    secret = "very-secret-do-not-leak-12345"
+    result = runner.invoke(
+        main,
+        [
+            "auth",
+            "s2s",
+            "set",
+            "--account-id",
+            "a",
+            "--client-id",
+            "b",
+            "--client-secret",
+            secret,
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert secret not in result.output
+
+
+def test_auth_s2s_set_aborts_on_ctrl_c_at_account_prompt(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancellation at any prompt must not write partial state."""
+    import zoom_cli.__main__ as main_mod
+    from zoom_cli import auth
+
+    monkeypatch.setattr(main_mod.questionary, "text", _FakeQ([None]))
+
+    result = runner.invoke(main, ["auth", "s2s", "set"])
+    assert result.exit_code != 0
+    assert auth.has_s2s_credentials() is False
+
+
 def test_rm_interactive_with_yes_flag_skips_confirmation(
     runner: CliRunner,
     write_meetings,
