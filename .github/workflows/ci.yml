@@ -4,7 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    # No branch filter so stacked PRs (whose base is a feature branch, not
+    # `main`) also get CI runs. Each PR still only runs once because GitHub's
+    # concurrency group below cancels superseded runs.
 
 permissions:
   contents: read
