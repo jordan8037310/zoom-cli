@@ -46,7 +46,11 @@ def _launch_name(name: str) -> None:
     try:
         if "url" in entry:
             meeting_id, url_password = parse_meeting_url(entry["url"])
-            password = entry.get("password") or url_password
+            # Presence-check via dict.get: a deliberately empty saved password
+            # ({"password": ""}) returns "" — meaning "no password" — rather
+            # than falling back to url_password. Preserves the contract from
+            # PR #25 where `_edit` lets users intentionally clear a field.
+            password = entry.get("password", url_password)
 
             if meeting_id is not None:
                 launch_zoommtg(meeting_id, password)
@@ -54,8 +58,11 @@ def _launch_name(name: str) -> None:
 
             # No /j/<id> path — likely a personal link (/s/<name>) or web-client URL.
             # Pass it through the zoommtg:// launcher so the desktop client
-            # handles the resolution.
-            launch_zoommtg_url(f"zoommtg://{strip_url_scheme(entry['url'])}")
+            # handles the resolution. We append the password only if the URL
+            # does NOT already carry one, otherwise launch_zoommtg_url would
+            # double-append `&pwd=...`.
+            extra_pwd = "" if url_password else password
+            launch_zoommtg_url(f"zoommtg://{strip_url_scheme(entry['url'])}", extra_pwd)
             return
 
         if "id" in entry:

@@ -217,6 +217,54 @@ def test_launch_name_explicit_password_field_overrides_url_password(
     assert captured_launches == [["open", "zoommtg://zoom.us/join?confno=123&pwd=explicit"]]
 
 
+def test_launch_name_personal_link_with_explicit_password_passes_password(
+    write_meetings, captured_launches: list[list[str]]
+) -> None:
+    """Regression for review feedback on #6: when a personal-link/non-/j/
+    URL has an explicit ``password`` field saved, the URL fallback path
+    must pass it to the launcher so the meeting joins without a manual
+    re-entry."""
+    write_meetings({"personal": {"url": "https://zoom.us/s/my-link", "password": "explicit"}})
+    commands_mod._launch_name("personal")
+    assert captured_launches == [["open", "zoommtg://zoom.us/s/my-link?pwd=explicit"]]
+
+
+def test_launch_name_personal_link_with_url_pwd_does_not_double_append(
+    write_meetings, captured_launches: list[list[str]]
+) -> None:
+    """If the URL already has ``pwd=``, we must not append it again — that
+    would corrupt the URL. The URL passes through verbatim through the
+    zoommtg launcher."""
+    write_meetings({"personal": {"url": "https://zoom.us/s/my-link?pwd=fromurl"}})
+    commands_mod._launch_name("personal")
+    assert captured_launches == [["open", "zoommtg://zoom.us/s/my-link?pwd=fromurl"]]
+
+
+def test_launch_name_empty_string_password_is_respected_not_replaced(
+    write_meetings, captured_launches: list[list[str]]
+) -> None:
+    """Regression for superpowers review on #6: an entry with
+    ``password: ""`` (intentional clear via ``zoom edit``) must keep the
+    empty value, not silently fall back to the URL's pwd= parameter.
+    Presence-check, not truthy-check."""
+    write_meetings({"team": {"url": "https://zoom.us/j/123?pwd=fromurl", "password": ""}})
+    commands_mod._launch_name("team")
+    # Empty explicit password wins over URL pwd=. launch_zoommtg with
+    # password="" produces the URL with no &pwd= suffix.
+    assert captured_launches == [["open", "zoommtg://zoom.us/join?confno=123"]]
+
+
+def test_launch_name_handles_confno_query_param_url(
+    write_meetings, captured_launches: list[list[str]]
+) -> None:
+    """Regression for codex review on #6: URLs of the form
+    ``?confno=<id>`` should now be recognized as meeting URLs and
+    re-emitted through the canonical zoommtg:// scheme."""
+    write_meetings({"team": {"url": "https://zoom.us/join?confno=123456789&pwd=p"}})
+    commands_mod._launch_name("team")
+    assert captured_launches == [["open", "zoommtg://zoom.us/join?confno=123456789&pwd=p"]]
+
+
 def test_launch_name_propagates_launcher_unavailable_as_error_message(
     write_meetings,
     monkeypatch: pytest.MonkeyPatch,

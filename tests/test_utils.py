@@ -163,6 +163,14 @@ def test_is_command_available_returns_false_for_garbage() -> None:
         ("https://zoom.us/j/777?tk=abc&pwd=secret&other=1", "777", "secret"),
         # zoommtg:// scheme
         ("zoommtg://zoom.us/j/888?pwd=zz", "888", "zz"),
+        # confno= query-param form (Zoom emits these for some click-to-join flows)
+        ("https://zoom.us/join?confno=123456789", "123456789", ""),
+        ("https://zoom.us/join?confno=987&pwd=secret", "987", "secret"),
+        ("zoommtg://zoom.us/join?confno=42&pwd=abc", "42", "abc"),
+        # Duplicate pwd= — first wins (attacker can't override by appending)
+        ("https://zoom.us/j/100?pwd=legit&pwd=evil", "100", "legit"),
+        # Unrecognized URL still extracts password for fallback launcher to use
+        ("https://zoom.us/wc/123?pwd=fromurl", None, "fromurl"),
         # Personal link / web-client / unknown form -> meeting_id is None
         ("https://zoom.us/s/personal-link", None, ""),
         ("https://zoom.us/wc/123/join", None, ""),
