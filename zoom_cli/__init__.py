@@ -1,11 +1,5 @@
-import os
-from zoom_cli.utils import ZOOM_CLI_DIR, SAVE_FILE_PATH, __version__
+"""zoom_cli — save and launch Zoom meetings from the command line."""
 
-# create zoom-cli directory 
-if not os.path.isdir(ZOOM_CLI_DIR):
-    os.makedirs(ZOOM_CLI_DIR)
+from zoom_cli.utils import __version__
 
-# create meetings.json file
-if not os.path.exists(SAVE_FILE_PATH):
-    with open(SAVE_FILE_PATH,'w+') as file:
-        file.write("{}")
+__all__ = ["__version__"]
