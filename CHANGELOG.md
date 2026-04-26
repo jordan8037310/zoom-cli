@@ -23,8 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - `setup.py` and `requirements.txt` (superseded by `pyproject.toml`).
 
+### Fixed
+- Ctrl-C no longer falls through as an empty string in `save`/`edit`/`rm`. Cancellation now raises `click.Abort` cleanly instead of silently routing into the wrong branch (`save`) or crashing with `KeyError: ''` (`edit`/`rm`).
+- `_edit` no longer silently restores the old value when a user submits an empty string; only Ctrl-C aborts. (Reported by codex review on PR #25.)
+- `edit`/`rm` short-circuit with a friendly message when no saved meetings exist, instead of presenting an empty selection.
+
 ### Security
-- Documented existing `os.system`/`shell=True` usage and plain-text password storage as known issues; tracked for follow-up PRs.
+- Replaced `os.system` shell interpolation in `launch_zoommtg_url` with argv-list `subprocess.run`; meeting URLs and passwords containing shell metacharacters (`"`, `` ` ``, `$`, `;`) can no longer be interpreted as shell syntax. Closes #4.
+- Replaced `subprocess.run(..., shell=True)` in `is_command_available` with `shutil.which`. The previous shell call was only ever invoked with literal command names, but `shutil.which` is the idiomatic, no-shell spelling.
+- Documented plain-text password storage as a known issue; tracked in #5 for a follow-up PR (OS keyring migration).
 
 ## [1.1.6] - 2024-03-03
 

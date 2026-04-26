@@ -44,39 +44,85 @@ def test_write_to_meeting_file_round_trips(tmp_zoom_cli_home: Path) -> None:
     assert on_disk == payload
 
 
-def test_launch_zoommtg_url_no_password(captured_launches: list[str]) -> None:
+def test_launch_zoommtg_url_no_password(captured_launches: list[list[str]]) -> None:
     utils_mod.launch_zoommtg_url("zoommtg://zoom.us/join?confno=1")
-    assert captured_launches == ['open "zoommtg://zoom.us/join?confno=1"']
+    assert captured_launches == [["open", "zoommtg://zoom.us/join?confno=1"]]
 
 
-def test_launch_zoommtg_url_appends_password_with_amp(captured_launches: list[str]) -> None:
+def test_launch_zoommtg_url_appends_password_with_amp(captured_launches: list[list[str]]) -> None:
     utils_mod.launch_zoommtg_url("zoommtg://zoom.us/join?confno=1", password="abc")
-    assert captured_launches == ['open "zoommtg://zoom.us/join?confno=1&pwd=abc"']
+    assert captured_launches == [["open", "zoommtg://zoom.us/join?confno=1&pwd=abc"]]
 
 
 def test_launch_zoommtg_url_appends_password_with_question_mark(
-    captured_launches: list[str],
+    captured_launches: list[list[str]],
 ) -> None:
     utils_mod.launch_zoommtg_url("zoommtg://zoom.us/foo", password="abc")
-    assert captured_launches == ['open "zoommtg://zoom.us/foo?pwd=abc"']
+    assert captured_launches == [["open", "zoommtg://zoom.us/foo?pwd=abc"]]
 
 
-def test_launch_zoommtg_builds_zoommtg_url(captured_launches: list[str]) -> None:
+def test_launch_zoommtg_builds_zoommtg_url(captured_launches: list[list[str]]) -> None:
     utils_mod.launch_zoommtg("123456789", "")
-    assert captured_launches == ['open "zoommtg://zoom.us/join?confno=123456789"']
+    assert captured_launches == [["open", "zoommtg://zoom.us/join?confno=123456789"]]
 
 
-def test_launch_zoommtg_includes_password(captured_launches: list[str]) -> None:
+def test_launch_zoommtg_includes_password(captured_launches: list[list[str]]) -> None:
     utils_mod.launch_zoommtg("123456789", "secret")
-    assert captured_launches == ['open "zoommtg://zoom.us/join?confno=123456789&pwd=secret"']
+    assert captured_launches == [["open", "zoommtg://zoom.us/join?confno=123456789&pwd=secret"]]
 
 
 def test_launch_zoommtg_url_falls_back_to_xdg_open(monkeypatch: pytest.MonkeyPatch) -> None:
-    launches: list[str] = []
-    monkeypatch.setattr(utils_mod, "is_command_available", lambda cmd: cmd == "xdg-open")
-    monkeypatch.setattr(utils_mod.os, "system", lambda c: launches.append(c) or 0)
+    """When `open` isn't on PATH, fall back to `xdg-open`."""
+    launches: list[list[str]] = []
+    import subprocess as _sp
+
+    monkeypatch.setattr(
+        utils_mod.shutil,
+        "which",
+        lambda cmd: "xdg-open" if cmd == "xdg-open" else None,
+    )
+    monkeypatch.setattr(
+        utils_mod.subprocess,
+        "run",
+        lambda argv, **kw: (
+            launches.append(list(argv))
+            or _sp.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
+        ),
+    )
     utils_mod.launch_zoommtg_url("zoommtg://zoom.us/join?confno=42")
-    assert launches == ['xdg-open "zoommtg://zoom.us/join?confno=42"']
+    assert launches == [["xdg-open", "zoommtg://zoom.us/join?confno=42"]]
+
+
+def test_launch_zoommtg_url_raises_when_no_launcher_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(utils_mod.shutil, "which", lambda _cmd: None)
+    with pytest.raises(utils_mod.LauncherUnavailableError):
+        utils_mod.launch_zoommtg_url("zoommtg://zoom.us/join?confno=1")
+
+
+@pytest.mark.parametrize(
+    "metacharacter_password",
+    [
+        '"; open evil.app; "',
+        "$(rm -rf ~)",
+        "`whoami`",
+        '\\";echo pwn;#',
+        "; rm -rf /; #",
+    ],
+)
+def test_launch_zoommtg_url_does_not_shell_interpret_metacharacters(
+    captured_launches: list[list[str]], metacharacter_password: str
+) -> None:
+    """Regression test for #4: shell metacharacters in user data must not be
+    interpreted as shell syntax. Argv-list ``subprocess.run`` guarantees this.
+    """
+    utils_mod.launch_zoommtg("123", metacharacter_password)
+    assert len(captured_launches) == 1
+    argv = captured_launches[0]
+    assert argv[0] == "open"
+    # The metacharacters must arrive verbatim in argv[1] — never expanded.
+    assert metacharacter_password in argv[1]
 
 
 def test_console_color_constants_are_strings() -> None:

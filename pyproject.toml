@@ -66,6 +66,7 @@ testpaths = ["tests"]
 filterwarnings = [
     "error",
     "ignore::DeprecationWarning:questionary.*",
+    "ignore::DeprecationWarning:prompt_toolkit.*",
 ]
 
 [tool.coverage.run]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 
 __version__ = "1.1.6"
@@ -65,33 +66,32 @@ def write_to_meeting_file(contents: dict) -> None:
 
 
 def is_command_available(command: str) -> bool:
-    """Return True if `command` is on PATH (or a shell builtin).
+    """Return True if `command` is on PATH."""
+    return shutil.which(command) is not None
 
-    Note: ``shell=True`` is required because ``command`` is a shell builtin and
-    cannot be invoked directly. Tracked for hardening in
-    https://github.com/jordan8037310/zoom-cli/issues (security/shell-injection epic).
-    """
-    result = subprocess.run(  # noqa: S602 - tracked, see docstring
-        f"command -v {command}",
-        shell=True,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return bool(result.stdout.strip())
+
+class LauncherUnavailableError(RuntimeError):
+    """Neither `open` nor `xdg-open` is available on PATH."""
 
 
 def launch_zoommtg_url(url: str, password: str = "") -> None:
     """Launch the Zoom desktop client for ``url``.
 
-    Note: ``os.system`` with shell semantics is preserved here for behavior
-    parity with the original implementation. Tracked for hardening in the
-    security epic; the planned fix is ``subprocess.Popen`` with a list-form argv.
+    Uses argv-list ``subprocess.run`` (not the shell) so that meeting URLs and
+    passwords containing shell metacharacters (``"``, `` ` ``, ``$``, ``;``)
+    cannot be interpreted as shell syntax. Closes #4.
     """
     decorator = "?" if "?" not in url else "&"
     url_to_launch = f"{url}{decorator}pwd={password}" if password else url
-    command = "open" if is_command_available("open") else "xdg-open"
-    os.system(f'{command} "{url_to_launch}"')  # noqa: S605 - tracked, see docstring
+    cmd = shutil.which("open") or shutil.which("xdg-open")
+    if cmd is None:
+        raise LauncherUnavailableError(
+            "Neither `open` nor `xdg-open` was found on PATH; cannot launch Zoom."
+        )
+    # Argv-list form (no shell) — `cmd` comes from shutil.which (literal
+    # "open"/"xdg-open") and `url_to_launch` is passed as an argv arg, never
+    # interpreted as shell syntax. S603 is a generic subprocess warning.
+    subprocess.run([cmd, url_to_launch], check=False)  # noqa: S603
 
 
 def launch_zoommtg(id: str, password: str) -> None:

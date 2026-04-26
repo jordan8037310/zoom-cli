@@ -1,3 +1,4 @@
+import click
 import questionary
 
 from zoom_cli.utils import (
@@ -82,8 +83,14 @@ def _edit(name, url, id, password):
     if password:
         new_dict["password"] = password
 
+    # For each existing field, re-prompt with the new value (if a flag was
+    # passed) or the old value as the default. The user can intentionally
+    # clear a field by submitting an empty string; only Ctrl-C aborts.
     for key, val in contents[name].items():
-        new_dict[key] = questionary.text(key, default=new_dict.get(key, val)).ask() or val
+        answer = questionary.text(key, default=new_dict.get(key, val)).ask()
+        if answer is None:
+            raise click.Abort
+        new_dict[key] = answer
 
     del contents[name]
     contents[name] = new_dict

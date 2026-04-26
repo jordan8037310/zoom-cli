@@ -14,6 +14,21 @@ from zoom_cli.commands import (
 from zoom_cli.utils import __version__, get_meeting_names
 
 
+def _ask_or_abort(question):
+    """Run a questionary question; abort cleanly if the user cancels (Ctrl-C).
+
+    questionary's ``.ask()`` returns ``None`` on cancellation. Letting that
+    propagate as ``""`` was a regression from the PyInquirer version (which
+    raised KeyboardInterrupt) — empty strings silently fell through into the
+    next prompt or into a downstream KeyError. Here we map ``None`` to
+    ``click.Abort`` so the user sees a clean exit.
+    """
+    answer = question.ask()
+    if answer is None:
+        raise click.Abort
+    return answer
+
+
 @click.group(cls=DefaultGroup, default="launch", default_if_no_args=True)
 @click.version_option(__version__)
 def main():
@@ -36,25 +51,27 @@ def launch(url_or_name):
 @click.option("--password", "-p", default="", help="Zoom password")
 def save(name, url, id, password):
     if not name:
-        name = questionary.text("Meeting name:").ask() or ""
+        name = _ask_or_abort(questionary.text("Meeting name:"))
 
     save_as_url: bool | None = None
     if not url and not id:
-        choice = questionary.select(
-            "Store as URL or Meeting ID/Password?",
-            choices=["URL", "Meeting ID/Password"],
-        ).ask()
+        choice = _ask_or_abort(
+            questionary.select(
+                "Store as URL or Meeting ID/Password?",
+                choices=["URL", "Meeting ID/Password"],
+            )
+        )
         save_as_url = choice == "URL"
 
     if not url and save_as_url is True:
-        url = questionary.text("Zoom URL:").ask() or ""
+        url = _ask_or_abort(questionary.text("Zoom URL:"))
 
     if url and save_as_url is True and "pwd=" not in url:
-        password = questionary.text("Meeting password:").ask() or ""
+        password = _ask_or_abort(questionary.text("Meeting password:"))
 
     if not id and save_as_url is False:
-        id = questionary.text("Meeting ID:").ask() or ""
-        password = questionary.text("Meeting password:").ask() or ""
+        id = _ask_or_abort(questionary.text("Meeting ID:"))
+        password = _ask_or_abort(questionary.text("Meeting password:"))
 
     if name and url:
         _save_url(name, url, password)
@@ -69,13 +86,11 @@ def save(name, url, id, password):
 @click.option("--password", "-p", default="", help="Zoom password")
 def edit(name, url, id, password):
     if not name:
-        name = (
-            questionary.select(
-                "Meeting name:",
-                choices=get_meeting_names(),
-            ).ask()
-            or ""
-        )
+        choices = get_meeting_names()
+        if not choices:
+            click.echo("No saved meetings to edit.")
+            return
+        name = _ask_or_abort(questionary.select("Meeting name:", choices=choices))
 
     _edit(name, url, id, password)
 
@@ -84,13 +99,11 @@ def edit(name, url, id, password):
 @click.argument("name", required=False)
 def rm(name):
     if not name:
-        name = (
-            questionary.select(
-                "Meeting name:",
-                choices=get_meeting_names(),
-            ).ask()
-            or ""
-        )
+        choices = get_meeting_names()
+        if not choices:
+            click.echo("No saved meetings to remove.")
+            return
+        name = _ask_or_abort(questionary.select("Meeting name:", choices=choices))
 
     _remove(name)
 

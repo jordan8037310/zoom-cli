@@ -7,6 +7,7 @@ and from launching real subprocesses.
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -32,18 +33,26 @@ def tmp_zoom_cli_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture
-def captured_launches(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Capture every URL that would have been launched without invoking the OS."""
-    launches: list[str] = []
+def captured_launches(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """Capture every argv that would have been launched without invoking the OS.
+
+    Each element is the argv list (e.g. ``["open", "zoommtg://..."]``).
+    """
+    launches: list[list[str]] = []
 
     import zoom_cli.utils as utils_mod
 
-    def fake_os_system(cmd: str) -> int:
-        launches.append(cmd)
-        return 0
+    def fake_run(argv, **kwargs):
+        launches.append(list(argv))
+        return subprocess.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(utils_mod.os, "system", fake_os_system)
-    monkeypatch.setattr(utils_mod, "is_command_available", lambda _cmd: True)
+    monkeypatch.setattr(utils_mod.subprocess, "run", fake_run)
+    # Make shutil.which echo back known launchers so tests can assert on simple argv.
+    monkeypatch.setattr(
+        utils_mod.shutil,
+        "which",
+        lambda cmd: cmd if cmd in {"open", "xdg-open"} else None,
+    )
     return launches
 
 
