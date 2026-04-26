@@ -2,6 +2,7 @@ import click
 import questionary
 from click_default_group import DefaultGroup
 
+from zoom_cli import auth
 from zoom_cli.commands import (
     _edit,
     _launch_name,
@@ -137,6 +138,62 @@ def rm(name, dry_run, yes):
 @main.command(help="List all saved meetings")
 def ls():
     _ls()
+
+
+# ---- API authentication ---------------------------------------------------
+
+
+@main.group("auth", help="Manage Zoom API authentication.")
+def auth_cmd():
+    """Top-level group for ``zoom auth ...``.
+
+    Function name has the ``_cmd`` suffix to avoid shadowing the ``auth``
+    module imported above; Click registers it under the bare name ``auth``.
+    """
+
+
+@auth_cmd.group("s2s", help="Server-to-Server OAuth credential management.")
+def s2s():
+    """Group for ``zoom auth s2s ...``."""
+
+
+@s2s.command("set", help="Save Server-to-Server OAuth credentials to the OS keyring.")
+@click.option("--account-id", default="", help="Zoom Account ID")
+@click.option("--client-id", default="", help="Server-to-Server OAuth Client ID")
+@click.option("--client-secret", default="", help="Server-to-Server OAuth Client Secret")
+def s2s_set(account_id, client_id, client_secret):
+    if not account_id:
+        account_id = _ask_or_abort(questionary.text("Account ID:"))
+    if not client_id:
+        client_id = _ask_or_abort(questionary.text("Client ID:"))
+    if not client_secret:
+        # questionary.password() masks the input on screen. The default
+        # text() prompt would echo the secret to the terminal.
+        client_secret = _ask_or_abort(questionary.password("Client Secret:"))
+
+    auth.save_s2s_credentials(
+        auth.S2SCredentials(
+            account_id=account_id,
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+    )
+    click.echo("Server-to-Server OAuth credentials saved.")
+
+
+@auth_cmd.command(help="Show which authentication mode is configured.")
+def status():
+    if auth.has_s2s_credentials():
+        click.echo("Server-to-Server OAuth: configured")
+    else:
+        click.echo("Server-to-Server OAuth: not configured")
+        click.echo("Run `zoom auth s2s set` to configure.")
+
+
+@auth_cmd.command(help="Clear all stored API authentication credentials.")
+def logout():
+    auth.clear_s2s_credentials()
+    click.echo("Cleared Server-to-Server OAuth credentials.")
 
 
 if __name__ == "__main__":

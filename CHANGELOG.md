@@ -35,6 +35,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced `subprocess.run(..., shell=True)` in `is_command_available` with `shutil.which`. The previous shell call was only ever invoked with literal command names, but `shutil.which` is the idiomatic, no-shell spelling.
 - Documented plain-text password storage as a known issue; tracked in #5 for a follow-up PR (OS keyring migration).
 
+### Added (PR [#29](https://github.com/jordan8037310/zoom-cli/pull/29) — partial #11, phase-2 entry)
+- New `zoom auth` subcommand group: foundation for Zoom REST API authentication.
+  - `zoom auth s2s set` saves Server-to-Server OAuth credentials (account_id, client_id, client_secret) to the OS keyring under service `zoom-cli-auth`.
+  - `zoom auth status` reports whether S2S is configured.
+  - `zoom auth logout` clears all stored API credentials.
+  - Client Secret prompt is masked (uses `questionary.password`) so it isn't echoed to the terminal.
+- New `zoom_cli/auth.py` module with `S2SCredentials` dataclass + storage helpers (`save_s2s_credentials`, `load_s2s_credentials`, `clear_s2s_credentials`, `has_s2s_credentials`).
+- Scoped to credential storage only — actual token exchange against `https://zoom.us/oauth/token` and `zoom auth s2s test` follow in a separate PR (keeps this PR small and reviewable).
+
 ### Security (PR [#28](https://github.com/jordan8037310/zoom-cli/pull/28) — closes #5)
 - New meeting passwords now go to the OS keyring (Keychain on macOS, libsecret/Secret-Service on Linux, Credential Manager on Windows) under service `zoom-cli` keyed by meeting name — they no longer land in plaintext in `~/.zoom-cli/meetings.json`.
 - `zoom ls` masks passwords as `********` regardless of where they came from. Even legacy plaintext-in-JSON passwords are now hidden in the listing.
