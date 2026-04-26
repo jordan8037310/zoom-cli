@@ -96,28 +96,35 @@ def _launch_name(name: str) -> None:
 
 
 def _save_url(name, url, password):
+    # Write the keyring BEFORE writing the JSON. If the keyring write fails
+    # (e.g. backend unhealthy), the user's existing meetings.json is left
+    # untouched — they don't end up with a meeting that has no usable
+    # password anywhere. Codex review on #28 caught this ordering bug.
+    if password:
+        secrets.set_password(name, password)
+    else:
+        secrets.delete_password(name)
+
     contents = get_meeting_file_contents()
     contents[name] = {"url": url}
     write_to_meeting_file(contents)
-    if password:
-        secrets.set_password(name, password)
-    else:
-        secrets.delete_password(name)
 
 
 def _save_id_password(name, id, password):
-    contents = get_meeting_file_contents()
-    contents[name] = {"id": id}
-    write_to_meeting_file(contents)
     if password:
         secrets.set_password(name, password)
     else:
         secrets.delete_password(name)
+
+    contents = get_meeting_file_contents()
+    contents[name] = {"id": id}
+    write_to_meeting_file(contents)
 
 
 def _edit(name, url, id, password):
     contents = get_meeting_file_contents()
     new_dict: dict[str, str] = {}
+    legacy_plaintext_password: str | None = None
 
     if url:
         new_dict["url"] = url
@@ -131,22 +138,31 @@ def _edit(name, url, id, password):
     # the explicit ``--password`` flag.
     for key, val in contents[name].items():
         if key == "password":
-            # Legacy plaintext password from a pre-keyring entry. Skip the
-            # prompt; we'll migrate it to the keyring below.
+            # Legacy plaintext password from a pre-keyring entry. Capture it
+            # so we can migrate it into the keyring below — never just drop
+            # it (all three reviewers on #28 flagged the silent loss).
+            legacy_plaintext_password = val
             continue
         answer = questionary.text(key, default=new_dict.get(key, val)).ask()
         if answer is None:
             raise click.Abort
         new_dict[key] = answer
 
+    # Password handling — keyring is the source of truth.
+    # Order matters: write keyring before rewriting JSON so a keyring-side
+    # failure leaves the user's prior state intact.
+    if password:
+        # Explicit --password flag wins.
+        secrets.set_password(name, password)
+    elif legacy_plaintext_password is not None and secrets.get_password(name) is None:
+        # Migrate legacy plaintext into the keyring on first edit. Only do
+        # this if there's no existing keyring entry — never overwrite a
+        # newer keyring value with stale legacy plaintext.
+        secrets.set_password(name, legacy_plaintext_password)
+
     del contents[name]
     contents[name] = new_dict
     write_to_meeting_file(contents)
-
-    # Password updates go through the keyring. If --password was passed,
-    # update; otherwise leave whatever's already there alone.
-    if password:
-        secrets.set_password(name, password)
 
 
 def _remove(name):

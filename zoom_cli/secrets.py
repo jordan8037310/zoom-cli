@@ -31,13 +31,17 @@ def get_password(meeting_name: str) -> str | None:
     Returns ``None`` (not the empty string) when the entry doesn't exist so
     callers can distinguish "not in keyring" from "saved as empty"; current
     callers don't rely on that distinction but future callers might.
+
+    Catches only the "no backend available" errors (``NoKeyringError``,
+    ``InitError``) so the CLI degrades gracefully on a headless Linux box
+    with no DBus. Locked-keyring errors and other failures are intentionally
+    NOT caught here — those mean the backend is present but refused, and a
+    silent fall-through would launch meetings with the wrong (or no)
+    password. The caller sees the exception and can decide what to do.
     """
     try:
         return keyring.get_password(SERVICE_NAME, meeting_name)
-    except keyring.errors.KeyringError:
-        # Backend unavailable (e.g. no DBus on a headless Linux box). Treat
-        # as "no stored password" so the CLI degrades gracefully — meetings
-        # without a stored password just prompt or fail at launch.
+    except (keyring.errors.NoKeyringError, keyring.errors.InitError):
         return None
 
 

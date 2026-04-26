@@ -267,6 +267,23 @@ def test_launch_name_falls_back_to_legacy_json_password(
     assert captured_launches == [["open", "zoommtg://zoom.us/join?confno=555&pwd=legacy-only"]]
 
 
+def test_launch_name_empty_keyring_password_overrides_url_pwd(
+    write_meetings, captured_launches: list[list[str]]
+) -> None:
+    """Superpowers review on PR #28: if the user explicitly stored an
+    empty-string password in the keyring (a deliberate "no password"),
+    that empty value must beat the URL's ``pwd=`` rather than falling
+    through to it."""
+    from zoom_cli import secrets
+
+    write_meetings({"team": {"url": "https://zoom.us/j/123?pwd=fromurl"}})
+    secrets.set_password("team", "")  # explicit empty
+
+    commands_mod._launch_name("team")
+    # Empty keyring password wins → no &pwd= appended.
+    assert captured_launches == [["open", "zoommtg://zoom.us/join?confno=123"]]
+
+
 def test_save_url_with_no_password_clears_keyring(tmp_zoom_cli_home) -> None:
     """`_save_url(name, url, "")` must clear any pre-existing keyring entry —
     otherwise re-saving a meeting "without a password" would silently keep
@@ -277,6 +294,31 @@ def test_save_url_with_no_password_clears_keyring(tmp_zoom_cli_home) -> None:
     commands_mod._save_url("standup", "https://zoom.us/j/1", "")
 
     assert secrets.get_password("standup") is None
+
+
+def test_save_url_keyring_failure_leaves_json_untouched(
+    tmp_zoom_cli_home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex regression for PR #28: save must write keyring BEFORE JSON.
+    If the keyring write fails, the prior on-disk state is preserved."""
+    from zoom_cli import secrets
+
+    # Seed: existing meeting with a known JSON contents.
+    (tmp_zoom_cli_home / "meetings.json").write_text(
+        '{"standup": {"url": "https://old.example/j/1"}}'
+    )
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("keyring backend exploded")
+
+    monkeypatch.setattr(secrets, "set_password", boom)
+
+    with pytest.raises(RuntimeError, match="keyring backend exploded"):
+        commands_mod._save_url("standup", "https://NEW.example/j/2", "newpw")
+
+    # JSON must be unchanged — the rewrite never happened.
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    assert on_disk == {"standup": {"url": "https://old.example/j/1"}}
 
 
 def test_remove_deletes_keyring_entry(write_meetings, tmp_zoom_cli_home) -> None:
@@ -442,25 +484,49 @@ def test_edit_with_password_flag_writes_to_keyring(
     assert secrets.get_password("team") == "new-pw"
 
 
-def test_edit_skips_legacy_plaintext_password_field(
+def test_edit_migrates_legacy_plaintext_password_into_keyring(
     write_meetings,
     tmp_zoom_cli_home: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A pre-keyring entry has ``password`` in JSON. `_edit` must not prompt
-    for it (we'd be exposing the plaintext via ``default=...``); it just
-    drops the field on the rewrite. The user can re-set the password via
-    ``--password`` if they want."""
+    """A pre-keyring entry has ``password`` in JSON. `_edit` must:
+    1. NOT re-prompt (would expose plaintext via ``default=...``).
+    2. Migrate the value into the keyring before dropping it from JSON.
+
+    Regression for all three reviewers on PR #28 — earlier behavior
+    silently destroyed the legacy plaintext on any edit."""
+    from zoom_cli import secrets
+
     write_meetings({"team": {"url": "https://old.example/j/1", "password": "legacy"}})
+    assert secrets.get_password("team") is None  # nothing in keyring yet
     fake = _FakeQ(["https://kept.example/j/1"])  # only the URL is prompted
     monkeypatch.setattr(commands_mod.questionary, "text", fake)
 
     commands_mod._edit("team", "", "", "")
 
     on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
-    # Legacy password field is gone — and importantly, was never offered as
-    # a default value to the user.
+    # Legacy password field is gone from JSON — but the value is in the keyring.
     assert on_disk == {"team": {"url": "https://kept.example/j/1"}}
+    assert secrets.get_password("team") == "legacy"
+
+
+def test_edit_legacy_password_migration_does_not_overwrite_existing_keyring(
+    write_meetings,
+    tmp_zoom_cli_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If a keyring entry already exists, the (stale) legacy JSON password
+    must NOT overwrite it. The keyring is authoritative."""
+    from zoom_cli import secrets
+
+    write_meetings({"team": {"url": "https://old.example/j/1", "password": "stale-legacy"}})
+    secrets.set_password("team", "fresh-keyring")
+    fake = _FakeQ(["https://kept.example/j/1"])
+    monkeypatch.setattr(commands_mod.questionary, "text", fake)
+
+    commands_mod._edit("team", "", "", "")
+
+    assert secrets.get_password("team") == "fresh-keyring"
 
 
 def test_edit_aborts_cleanly_on_ctrl_c(
