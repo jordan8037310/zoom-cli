@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -203,31 +204,48 @@ def test_strip_url_scheme_strips_zoommtg() -> None:
 # ---- atomic write_to_meeting_file ---------------------------------------
 
 
-def test_write_to_meeting_file_is_atomic_uses_replace(tmp_zoom_cli_home: Path) -> None:
-    """Verify the temp-then-replace flow happens — a tempfile must be written
-    in the same dir as the target, then renamed onto it."""
+def test_write_to_meeting_file_actually_calls_os_replace(
+    tmp_zoom_cli_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pin the atomic-write contract: ``os.replace`` must be the call that
+    swaps the new content into place. A future implementation that wrote
+    ``meetings.json`` directly would silently regress without this test.
+    """
+    captured: list[tuple[str, str]] = []
+    real_replace = utils_mod.os.replace
+
+    def tracking_replace(src: str, dst: str) -> None:
+        captured.append((str(src), str(dst)))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(utils_mod.os, "replace", tracking_replace)
+
     payload = {"team": {"id": "1"}}
     utils_mod.write_to_meeting_file(payload)
 
-    target = tmp_zoom_cli_home / "meetings.json"
-    on_disk = json.loads(target.read_text())
+    assert len(captured) == 1, "os.replace must be called exactly once"
+    src, dst = captured[0]
+    assert dst == str(tmp_zoom_cli_home / "meetings.json")
+    # The src is a sibling tempfile, not the target itself.
+    assert src != dst
+    assert os.path.dirname(src) == os.path.dirname(dst)
+    assert os.path.basename(src).startswith(".meetings.")
+
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
     assert on_disk == payload
 
-    # No leftover tempfiles in the dir.
     leftovers = [p for p in tmp_zoom_cli_home.iterdir() if p.name != "meetings.json"]
     assert leftovers == [], f"unexpected leftover files: {leftovers}"
 
 
-def test_write_to_meeting_file_does_not_corrupt_on_error(
+def test_write_to_meeting_file_cleans_up_when_replace_fails(
     tmp_zoom_cli_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """If the write fails after the tempfile is created, the original
-    meetings.json must remain intact."""
-    # Seed a known good file.
+    """If ``os.replace`` raises, the original file must remain intact and
+    the tempfile must be cleaned up."""
     target = tmp_zoom_cli_home / "meetings.json"
     target.write_text('{"original": {"id": "999"}}')
 
-    # Make os.replace raise to simulate a mid-replace failure.
     def boom(*_args, **_kwargs):
         raise OSError("simulated replace failure")
 
@@ -236,16 +254,50 @@ def test_write_to_meeting_file_does_not_corrupt_on_error(
     with pytest.raises(OSError, match="simulated replace failure"):
         utils_mod.write_to_meeting_file({"new": {"id": "111"}})
 
-    # Original content must still be there.
     on_disk = json.loads(target.read_text())
     assert on_disk == {"original": {"id": "999"}}
 
-    # Tempfile must have been cleaned up.
+    leftovers = [p for p in tmp_zoom_cli_home.iterdir() if p.name != "meetings.json"]
+    assert leftovers == [], f"tempfile leak: {leftovers}"
+
+
+def test_write_to_meeting_file_cleans_up_when_fsync_fails(
+    tmp_zoom_cli_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If ``os.fsync`` (called inside the ``with os.fdopen(...)`` block)
+    raises, the cleanup branch must still delete the tempfile and the
+    original meetings.json must remain intact. Covers the asymmetric path
+    flagged in code review (codex + python-review on PR #27)."""
+    target = tmp_zoom_cli_home / "meetings.json"
+    target.write_text('{"original": {"id": "999"}}')
+
+    real_fsync = utils_mod.os.fsync
+
+    def boom_on_file_fsync(fd: int) -> None:
+        # Only blow up on the *file* fsync (after it's been opened for
+        # writing). Directory fsyncs (called later for durability) should
+        # still work.
+        raise OSError("simulated fsync failure")
+
+    monkeypatch.setattr(utils_mod.os, "fsync", boom_on_file_fsync)
+
+    with pytest.raises(OSError, match="simulated fsync failure"):
+        utils_mod.write_to_meeting_file({"new": {"id": "111"}})
+
+    # Restore for any subsequent fixtures
+    monkeypatch.setattr(utils_mod.os, "fsync", real_fsync)
+
+    on_disk = json.loads(target.read_text())
+    assert on_disk == {"original": {"id": "999"}}
+
     leftovers = [p for p in tmp_zoom_cli_home.iterdir() if p.name != "meetings.json"]
     assert leftovers == [], f"tempfile leak: {leftovers}"
 
 
 def test_write_to_meeting_file_round_trips_unicode(tmp_zoom_cli_home: Path) -> None:
+    """``json.dumps`` defaults to ``ensure_ascii=True``, so non-ASCII chars
+    are escaped to ``\\uXXXX`` on disk — but ``json.loads`` decodes them
+    back, so the round-trip is lossless."""
     payload = {"meeting-with-emoji-🚀": {"password": "p@ss-Ω"}}
     utils_mod.write_to_meeting_file(payload)
     on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())

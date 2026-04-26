@@ -63,20 +63,29 @@ def get_meeting_names() -> list[str]:
 
 
 def write_to_meeting_file(contents: dict) -> None:
-    """Write the meetings JSON atomically.
+    """Write the meetings JSON atomically and durably.
 
-    Strategy: write the new content to a sibling tempfile, ``fsync`` to flush
-    the page cache, then ``os.replace`` (which is atomic on POSIX and on
-    Windows for files on the same filesystem) to swap it into place. This
-    prevents partial-write corruption if the process is killed mid-write or
-    the system crashes — readers will see either the old file or the new
-    file, never a half-written one.
+    Strategy:
+    1. Serialize the new content to a sibling tempfile (created via
+       ``tempfile.mkstemp`` so the name is unpredictable and exclusive).
+    2. ``flush()`` + ``os.fsync()`` the tempfile's fd so its contents reach
+       the disk before we swap it into place.
+    3. ``os.replace()`` it onto ``meetings.json``. The replace is atomic on
+       POSIX and on Windows for same-filesystem replacements, so readers
+       see either the old file or the new file — never a half-written one.
+    4. ``os.fsync()`` the parent directory so the directory entry update
+       (the rename) is also durable on POSIX. Skipped on platforms where
+       opening a directory raises ``PermissionError`` (Windows).
+
+    On any exception during the write, best-effort delete the tempfile so
+    we don't leak it, then re-raise the original error. ``meetings.json``
+    itself is never opened until the final replace, so a mid-write failure
+    cannot corrupt it.
     """
     _ensure_storage()
     payload = dict_to_json_string(contents)
     dir_name = os.path.dirname(SAVE_FILE_PATH) or "."
-    # delete=False because we hand the path to os.replace ourselves.
-    fd, tmp_path = _mkstemp_for(dir_name)
+    fd, tmp_path = tempfile.mkstemp(prefix=".meetings.", suffix=".tmp", dir=dir_name)
     try:
         with os.fdopen(fd, "w") as file:
             file.write(payload)
@@ -89,10 +98,15 @@ def write_to_meeting_file(contents: dict) -> None:
             os.unlink(tmp_path)
         raise
 
-
-def _mkstemp_for(directory: str) -> tuple[int, str]:
-    """Wrap ``tempfile.mkstemp`` for this module so tests can stub it cleanly."""
-    return tempfile.mkstemp(prefix=".meetings.", suffix=".tmp", dir=directory)
+    # Durability: fsync the parent dir so the new dirent survives a crash
+    # right after the rename. POSIX-only — Windows raises PermissionError
+    # when you try to open a directory.
+    with contextlib.suppress(OSError, PermissionError):
+        dir_fd = os.open(dir_name, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
 
 
 def is_command_available(command: str) -> bool:

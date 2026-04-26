@@ -109,6 +109,29 @@ def test_rm_dry_run_does_not_modify_file(
     assert on_disk == {"a": {"id": "1"}, "b": {"id": "2"}}
 
 
+def test_rm_interactive_dry_run_does_not_confirm_or_delete(
+    runner: CliRunner,
+    write_meetings,
+    tmp_zoom_cli_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`zoom rm --dry-run` (no positional name): pick from list, print the
+    preview, return without firing the confirmation prompt."""
+    import zoom_cli.__main__ as main_mod
+
+    write_meetings({"alpha": {"id": "1"}, "beta": {"id": "2"}})
+    monkeypatch.setattr(main_mod.questionary, "select", _FakeQ(["alpha"]))
+
+    result = runner.invoke(main, ["rm", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "[dry-run]" in result.output
+    assert "alpha" in result.output
+    assert "Remove meeting" not in result.output  # confirm prompt did NOT fire
+
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    assert on_disk == {"alpha": {"id": "1"}, "beta": {"id": "2"}}
+
+
 def test_rm_interactive_confirms_before_deleting(
     runner: CliRunner,
     write_meetings,
