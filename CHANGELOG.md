@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced `subprocess.run(..., shell=True)` in `is_command_available` with `shutil.which`. The previous shell call was only ever invoked with literal command names, but `shutil.which` is the idiomatic, no-shell spelling.
 - Documented plain-text password storage as a known issue; tracked in #5 for a follow-up PR (OS keyring migration).
 
+### Added (PR [#30](https://github.com/jordan8037310/zoom-cli/pull/30) — closes #11)
+- New `zoom auth s2s test` command exchanges saved Server-to-Server OAuth credentials for an access token and reports back ("OK" with token-expiry minutes and granted scopes, or a typed error message). Distinguishes "credentials rejected" (HTTP status from Zoom) from "couldn't reach api.zoom.us" (network/TLS failure) so the user knows where to look.
+- New `zoom_cli/api/` subpackage seeding the REST API client surface. First module: `oauth.py` with `AccessToken` dataclass (with `is_expired` property), `ZoomAuthError` exception (carrying status_code + error_code + reason), and `fetch_access_token(creds)` against `https://zoom.us/oauth/token` using HTTP Basic auth.
+- `httpx>=0.27,<1` added as runtime dependency. Tests use `httpx.MockTransport` so the production code is exercised end-to-end without ever opening a socket.
+
 ### Added (PR [#29](https://github.com/jordan8037310/zoom-cli/pull/29) — partial #11, phase-2 entry)
 - New `zoom auth` subcommand group: foundation for Zoom REST API authentication.
   - `zoom auth s2s set` saves Server-to-Server OAuth credentials (account_id, client_id, client_secret) to the OS keyring under service `zoom-cli-auth`.
