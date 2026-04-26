@@ -35,6 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced `subprocess.run(..., shell=True)` in `is_command_available` with `shutil.which`. The previous shell call was only ever invoked with literal command names, but `shutil.which` is the idiomatic, no-shell spelling.
 - Documented plain-text password storage as a known issue; tracked in #5 for a follow-up PR (OS keyring migration).
 
+### Changed (PR [#26](https://github.com/jordan8037310/zoom-cli/pull/26) — closes #6)
+- `_launch_name` URL parsing now uses `urllib.parse.urlsplit` + `parse_qs` instead of brittle `str.index`/`min(..., float("inf"))` slicing. Personal links (`/s/<name>`), web-client URLs (`/wc/...`), URLs with fragments, and URLs with `pwd=` not as the first query parameter all work now where they previously crashed with `ValueError`.
+- `_launch_name` correctly URL-decodes percent-encoded passwords (`pwd=hello%20world` → `hello world`).
+- `_launch_name` falls back to launching the URL directly through the `zoommtg://` scheme when the URL is not in the standard `/j/<id>` form.
+- `_launch_url` no longer swallows unexpected exceptions with a bare `except Exception`. Only the launcher's own `LauncherUnavailableError` produces a friendly error message; other exceptions propagate so genuine bugs are visible.
+- New `parse_meeting_url(url)` and `strip_url_scheme(url)` helpers in `zoom_cli.utils`.
+
 ## [1.1.6] - 2024-03-03
 
 ### Fixed

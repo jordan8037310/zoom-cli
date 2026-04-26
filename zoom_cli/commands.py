@@ -3,57 +3,74 @@ import questionary
 
 from zoom_cli.utils import (
     ConsoleColor,
+    LauncherUnavailableError,
     get_meeting_file_contents,
     launch_zoommtg,
     launch_zoommtg_url,
+    parse_meeting_url,
+    strip_url_scheme,
     write_to_meeting_file,
 )
 
 
-def _launch_url(url):
+def _print_error(message: str) -> None:
+    print(ConsoleColor.BOLD + "Error:" + ConsoleColor.END, end=" ")
+    print(message)
+
+
+def _launch_url(url: str) -> None:
+    """Launch a Zoom meeting from any URL by rewriting the scheme to ``zoommtg://``.
+
+    Accepts URLs with or without an existing scheme. Only catches
+    ``LauncherUnavailableError`` so that genuine bugs propagate instead of
+    being swallowed by a bare ``except``.
+    """
+    rebuilt = f"zoommtg://{strip_url_scheme(url)}"
     try:
-        url_to_launch = url[url.index("://") + 3 :] if "://" in url else url
-        launch_zoommtg_url(f"zoommtg://{url_to_launch}")
-    except Exception:
-        print(ConsoleColor.BOLD + "Error:" + ConsoleColor.END, end=" ")
-        print("Unable to launch given URL:  " + ConsoleColor.BOLD + url + ConsoleColor.END + ".")
+        launch_zoommtg_url(rebuilt)
+    except LauncherUnavailableError as exc:
+        _print_error(str(exc))
 
 
-def _launch_name(name):
+def _launch_name(name: str) -> None:
     contents = get_meeting_file_contents()
 
-    if name in contents:
-        if "url" in contents[name]:
-            url = contents[name]["url"]
-
-            # Extract id from URL: between "/j/" and either "?" or end-of-string.
-            id_start = url.index("/j/") + 3
-            query_idx = url.index("?") if "?" in url else len(url)
-            id = url[id_start:query_idx]
-            password = ""
-
-            if "pwd=" in url:
-                pwd_start = url.index("pwd=") + 4
-                pwd_end = url.index("&", pwd_start) if "&" in url[pwd_start:] else len(url)
-                password = url[pwd_start:pwd_end]
-
-            launch_zoommtg(id, contents[name].get("password", password))
-        elif "id" in contents[name]:
-            launch_zoommtg(contents[name]["id"], contents[name].get("password", ""))
-        else:
-            print(ConsoleColor.BOLD + "Error:" + ConsoleColor.END, end=" ")
-            print(
-                "No url or id found for meeting with title "
-                + ConsoleColor.BOLD
-                + name
-                + ConsoleColor.END
-                + "."
-            )
-    else:
-        print(ConsoleColor.BOLD + "Error:" + ConsoleColor.END, end=" ")
-        print(
+    if name not in contents:
+        _print_error(
             "Could not find meeting with title " + ConsoleColor.BOLD + name + ConsoleColor.END + "."
         )
+        return
+
+    entry = contents[name]
+
+    try:
+        if "url" in entry:
+            meeting_id, url_password = parse_meeting_url(entry["url"])
+            password = entry.get("password") or url_password
+
+            if meeting_id is not None:
+                launch_zoommtg(meeting_id, password)
+                return
+
+            # No /j/<id> path — likely a personal link (/s/<name>) or web-client URL.
+            # Pass it through the zoommtg:// launcher so the desktop client
+            # handles the resolution.
+            launch_zoommtg_url(f"zoommtg://{strip_url_scheme(entry['url'])}")
+            return
+
+        if "id" in entry:
+            launch_zoommtg(entry["id"], entry.get("password", ""))
+            return
+
+        _print_error(
+            "No url or id found for meeting with title "
+            + ConsoleColor.BOLD
+            + name
+            + ConsoleColor.END
+            + "."
+        )
+    except LauncherUnavailableError as exc:
+        _print_error(str(exc))
 
 
 def _save_url(name, url, password):

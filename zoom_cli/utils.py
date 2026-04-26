@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+from urllib.parse import parse_qs, urlsplit
 
 __version__ = "1.1.6"
 
@@ -97,3 +98,28 @@ def launch_zoommtg_url(url: str, password: str = "") -> None:
 def launch_zoommtg(id: str, password: str) -> None:
     url = "zoommtg://zoom.us/join?confno=" + id
     launch_zoommtg_url(url, password)
+
+
+def parse_meeting_url(url: str) -> tuple[str | None, str]:
+    """Extract ``(meeting_id, password)`` from a Zoom meeting URL.
+
+    Recognizes the standard ``/j/<id>`` meeting URL form. Personal links
+    (``/s/<name>``), web-client links (``/wc/<id>``), and unrecognized
+    formats return ``(None, "")`` so callers can fall back to launching
+    the URL as-is.
+
+    The ``pwd=`` query parameter is URL-decoded by ``parse_qs``, so
+    percent-encoded passwords (e.g. ``pwd=ab%23cd``) round-trip cleanly.
+    """
+    parsed = urlsplit(url)
+    path_segments = [seg for seg in parsed.path.split("/") if seg]
+    meeting_id: str | None = None
+    if len(path_segments) >= 2 and path_segments[0] == "j":
+        meeting_id = path_segments[1]
+    password = parse_qs(parsed.query).get("pwd", [""])[0]
+    return meeting_id, password
+
+
+def strip_url_scheme(url: str) -> str:
+    """Return ``url`` with any leading ``scheme://`` removed."""
+    return url.split("://", 1)[1] if "://" in url else url
