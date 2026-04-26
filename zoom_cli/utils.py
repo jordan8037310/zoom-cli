@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+from urllib.parse import parse_qs, urlsplit
 
 __version__ = "1.1.6"
 
@@ -97,3 +98,47 @@ def launch_zoommtg_url(url: str, password: str = "") -> None:
 def launch_zoommtg(id: str, password: str) -> None:
     url = "zoommtg://zoom.us/join?confno=" + id
     launch_zoommtg_url(url, password)
+
+
+def parse_meeting_url(url: str) -> tuple[str | None, str]:
+    """Extract ``(meeting_id, password)`` from a Zoom meeting URL.
+
+    Recognizes:
+
+    - ``/j/<id>`` — the standard meeting URL form.
+    - ``?confno=<id>`` query parameter — Zoom's older click-to-join form,
+      sometimes still emitted (and the same form the ``zoommtg://`` scheme
+      uses internally).
+
+    Personal links (``/s/<name>``), web-client links (``/wc/<id>``), and
+    unrecognized formats return ``(None, password_if_any)`` so callers can
+    fall back to launching the URL as-is. Note: even for unrecognized
+    formats the ``pwd=`` parameter is still extracted, so a caller routing
+    a ``/wc/...?pwd=abc`` through the fallback launcher knows to add the
+    password if the URL doesn't already contain one.
+
+    The ``pwd=`` query parameter is URL-decoded by ``parse_qs``, so
+    percent-encoded passwords (e.g. ``pwd=ab%23cd``) round-trip cleanly.
+    If multiple ``pwd=`` parameters are present (malicious or buggy), the
+    **first** value wins; an attacker cannot override a legitimate first
+    value by appending ``&pwd=evil``.
+    """
+    parsed = urlsplit(url)
+    path_segments = [seg for seg in parsed.path.split("/") if seg]
+    query = parse_qs(parsed.query)
+
+    meeting_id: str | None = None
+    if len(path_segments) >= 2 and path_segments[0] == "j":
+        meeting_id = path_segments[1]
+    else:
+        confno_values = query.get("confno", [])
+        if confno_values:
+            meeting_id = confno_values[0]
+
+    password = query.get("pwd", [""])[0]
+    return meeting_id, password
+
+
+def strip_url_scheme(url: str) -> str:
+    """Return ``url`` with any leading ``scheme://`` removed."""
+    return url.split("://", 1)[1] if "://" in url else url

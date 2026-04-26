@@ -77,6 +77,40 @@ def test_launch_url_handles_url_without_scheme(captured_launches: list[list[str]
     assert captured_launches == [["open", "zoommtg://zoom.us/j/456"]]
 
 
+def test_launch_url_does_not_swallow_unexpected_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #6 — bare ``except Exception`` previously hid bugs.
+
+    Genuine bugs in the launcher must propagate; only the launcher's
+    own ``LauncherUnavailableError`` is treated as a recoverable user error.
+    """
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(commands_mod, "launch_zoommtg_url", boom)
+
+    with pytest.raises(RuntimeError, match="unexpected"):
+        commands_mod._launch_url("https://zoom.us/j/1")
+
+
+def test_launch_url_reports_launcher_unavailable_cleanly(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from zoom_cli import utils as utils_mod
+
+    def boom(*_args, **_kwargs):
+        raise utils_mod.LauncherUnavailableError("no launcher")
+
+    monkeypatch.setattr(commands_mod, "launch_zoommtg_url", boom)
+
+    commands_mod._launch_url("https://zoom.us/j/1")
+    out = capsys.readouterr().out
+    assert "Error:" in out
+    assert "no launcher" in out
+
+
 def test_launch_name_uses_saved_url(write_meetings, captured_launches: list[list[str]]) -> None:
     write_meetings({"team": {"url": "https://zoom.us/j/123?pwd=abc"}})
     commands_mod._launch_name("team")
@@ -113,6 +147,138 @@ def test_launch_name_meeting_without_url_or_id(
     commands_mod._launch_name("empty")
     assert captured_launches == []
     assert "No url or id found" in capsys.readouterr().out
+
+
+# ---- _launch_name URL-parsing edge cases (issue #6) ----------------------
+
+
+def test_launch_name_personal_link_falls_back_to_url_launch(
+    write_meetings, captured_launches: list[list[str]]
+) -> None:
+    """Regression for #6: ``/s/personal-name`` URLs previously crashed
+    because slice-based parsing called ``url.index('/j/')``. Now they fall
+    back to launching the URL through the zoommtg scheme."""
+    write_meetings({"personal": {"url": "https://zoom.us/s/my-personal-link"}})
+    commands_mod._launch_name("personal")
+    assert captured_launches == [["open", "zoommtg://zoom.us/s/my-personal-link"]]
+
+
+def test_launch_name_web_client_url_falls_back(
+    write_meetings, captured_launches: list[list[str]]
+) -> None:
+    write_meetings({"webclient": {"url": "https://zoom.us/wc/123/join?pwd=abc"}})
+    commands_mod._launch_name("webclient")
+    assert captured_launches == [["open", "zoommtg://zoom.us/wc/123/join?pwd=abc"]]
+
+
+def test_launch_name_decodes_percent_encoded_password(
+    write_meetings, captured_launches: list[list[str]]
+) -> None:
+    """``parse_qs`` URL-decodes the password before we re-build the
+    zoommtg URL, so a percent-encoded ``#`` round-trips correctly."""
+    write_meetings({"team": {"url": "https://zoom.us/j/123?pwd=ab%23cd"}})
+    commands_mod._launch_name("team")
+    assert captured_launches == [["open", "zoommtg://zoom.us/join?confno=123&pwd=ab#cd"]]
+
+
+def test_launch_name_decodes_space_in_password(
+    write_meetings, captured_launches: list[list[str]]
+) -> None:
+    write_meetings({"team": {"url": "https://zoom.us/j/123?pwd=hello%20world"}})
+    commands_mod._launch_name("team")
+    assert captured_launches == [["open", "zoommtg://zoom.us/join?confno=123&pwd=hello world"]]
+
+
+def test_launch_name_picks_pwd_when_other_query_params_present(
+    write_meetings, captured_launches: list[list[str]]
+) -> None:
+    """Earlier slice-based code broke on multiple ``&`` params if ``pwd``
+    wasn't the first one. parse_qs handles arbitrary order."""
+    write_meetings({"team": {"url": "https://zoom.us/j/123?tk=tracking&pwd=secret&other=1"}})
+    commands_mod._launch_name("team")
+    assert captured_launches == [["open", "zoommtg://zoom.us/join?confno=123&pwd=secret"]]
+
+
+def test_launch_name_handles_url_with_fragment(
+    write_meetings, captured_launches: list[list[str]]
+) -> None:
+    write_meetings({"team": {"url": "https://zoom.us/j/123?pwd=abc#section"}})
+    commands_mod._launch_name("team")
+    assert captured_launches == [["open", "zoommtg://zoom.us/join?confno=123&pwd=abc"]]
+
+
+def test_launch_name_explicit_password_field_overrides_url_password(
+    write_meetings, captured_launches: list[list[str]]
+) -> None:
+    """When an entry has both a URL with ``pwd=`` and an explicit
+    ``password`` field, the explicit field wins (preserves prior behavior)."""
+    write_meetings({"team": {"url": "https://zoom.us/j/123?pwd=fromurl", "password": "explicit"}})
+    commands_mod._launch_name("team")
+    assert captured_launches == [["open", "zoommtg://zoom.us/join?confno=123&pwd=explicit"]]
+
+
+def test_launch_name_personal_link_with_explicit_password_passes_password(
+    write_meetings, captured_launches: list[list[str]]
+) -> None:
+    """Regression for review feedback on #6: when a personal-link/non-/j/
+    URL has an explicit ``password`` field saved, the URL fallback path
+    must pass it to the launcher so the meeting joins without a manual
+    re-entry."""
+    write_meetings({"personal": {"url": "https://zoom.us/s/my-link", "password": "explicit"}})
+    commands_mod._launch_name("personal")
+    assert captured_launches == [["open", "zoommtg://zoom.us/s/my-link?pwd=explicit"]]
+
+
+def test_launch_name_personal_link_with_url_pwd_does_not_double_append(
+    write_meetings, captured_launches: list[list[str]]
+) -> None:
+    """If the URL already has ``pwd=``, we must not append it again — that
+    would corrupt the URL. The URL passes through verbatim through the
+    zoommtg launcher."""
+    write_meetings({"personal": {"url": "https://zoom.us/s/my-link?pwd=fromurl"}})
+    commands_mod._launch_name("personal")
+    assert captured_launches == [["open", "zoommtg://zoom.us/s/my-link?pwd=fromurl"]]
+
+
+def test_launch_name_empty_string_password_is_respected_not_replaced(
+    write_meetings, captured_launches: list[list[str]]
+) -> None:
+    """Regression for superpowers review on #6: an entry with
+    ``password: ""`` (intentional clear via ``zoom edit``) must keep the
+    empty value, not silently fall back to the URL's pwd= parameter.
+    Presence-check, not truthy-check."""
+    write_meetings({"team": {"url": "https://zoom.us/j/123?pwd=fromurl", "password": ""}})
+    commands_mod._launch_name("team")
+    # Empty explicit password wins over URL pwd=. launch_zoommtg with
+    # password="" produces the URL with no &pwd= suffix.
+    assert captured_launches == [["open", "zoommtg://zoom.us/join?confno=123"]]
+
+
+def test_launch_name_handles_confno_query_param_url(
+    write_meetings, captured_launches: list[list[str]]
+) -> None:
+    """Regression for codex review on #6: URLs of the form
+    ``?confno=<id>`` should now be recognized as meeting URLs and
+    re-emitted through the canonical zoommtg:// scheme."""
+    write_meetings({"team": {"url": "https://zoom.us/join?confno=123456789&pwd=p"}})
+    commands_mod._launch_name("team")
+    assert captured_launches == [["open", "zoommtg://zoom.us/join?confno=123456789&pwd=p"]]
+
+
+def test_launch_name_propagates_launcher_unavailable_as_error_message(
+    write_meetings,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from zoom_cli import utils as utils_mod
+
+    write_meetings({"team": {"id": "1"}})
+    monkeypatch.setattr(utils_mod.shutil, "which", lambda _cmd: None)
+
+    commands_mod._launch_name("team")
+    out = capsys.readouterr().out
+    assert "Error:" in out
+    assert "Neither" in out  # message from LauncherUnavailableError
 
 
 # ---- _edit ---------------------------------------------------------------

@@ -137,3 +137,64 @@ def test_is_command_available_finds_known_command() -> None:
 
 def test_is_command_available_returns_false_for_garbage() -> None:
     assert utils_mod.is_command_available("definitely-not-a-real-command-zxcvbn") is False
+
+
+# ---- parse_meeting_url ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url,expected_id,expected_password",
+    [
+        # Standard meeting URLs
+        ("https://zoom.us/j/123456789", "123456789", ""),
+        ("https://zoom.us/j/123456789?pwd=abc", "123456789", "abc"),
+        ("https://us02web.zoom.us/j/987654321?pwd=xyz", "987654321", "xyz"),
+        # Subdomained / vanity hosts
+        ("https://example.zoom.us/j/111?pwd=p", "111", "p"),
+        # Trailing slash and extra path segments
+        ("https://zoom.us/j/222/", "222", ""),
+        ("https://zoom.us/j/333/extra-segment", "333", ""),
+        # URL fragment shouldn't confuse parsing
+        ("https://zoom.us/j/444?pwd=ok#frag", "444", "ok"),
+        # Percent-encoded password decodes cleanly
+        ("https://zoom.us/j/555?pwd=ab%23cd", "555", "ab#cd"),
+        ("https://zoom.us/j/666?pwd=hello%20world", "666", "hello world"),
+        # Multiple query params, pwd not first
+        ("https://zoom.us/j/777?tk=abc&pwd=secret&other=1", "777", "secret"),
+        # zoommtg:// scheme
+        ("zoommtg://zoom.us/j/888?pwd=zz", "888", "zz"),
+        # confno= query-param form (Zoom emits these for some click-to-join flows)
+        ("https://zoom.us/join?confno=123456789", "123456789", ""),
+        ("https://zoom.us/join?confno=987&pwd=secret", "987", "secret"),
+        ("zoommtg://zoom.us/join?confno=42&pwd=abc", "42", "abc"),
+        # Duplicate pwd= — first wins (attacker can't override by appending)
+        ("https://zoom.us/j/100?pwd=legit&pwd=evil", "100", "legit"),
+        # Unrecognized URL still extracts password for fallback launcher to use
+        ("https://zoom.us/wc/123?pwd=fromurl", None, "fromurl"),
+        # Personal link / web-client / unknown form -> meeting_id is None
+        ("https://zoom.us/s/personal-link", None, ""),
+        ("https://zoom.us/wc/123/join", None, ""),
+        ("https://zoom.us/", None, ""),
+        # Garbage
+        ("not a url", None, ""),
+        ("", None, ""),
+    ],
+)
+def test_parse_meeting_url_extracts_id_and_password(
+    url: str, expected_id: str | None, expected_password: str
+) -> None:
+    meeting_id, password = utils_mod.parse_meeting_url(url)
+    assert meeting_id == expected_id
+    assert password == expected_password
+
+
+def test_strip_url_scheme_preserves_url_without_scheme() -> None:
+    assert utils_mod.strip_url_scheme("zoom.us/j/1") == "zoom.us/j/1"
+
+
+def test_strip_url_scheme_strips_https() -> None:
+    assert utils_mod.strip_url_scheme("https://zoom.us/j/1?pwd=abc") == "zoom.us/j/1?pwd=abc"
+
+
+def test_strip_url_scheme_strips_zoommtg() -> None:
+    assert utils_mod.strip_url_scheme("zoommtg://zoom.us/j/2?pwd=xyz") == "zoom.us/j/2?pwd=xyz"
