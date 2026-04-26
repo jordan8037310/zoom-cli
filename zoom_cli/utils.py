@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
 import subprocess
+import tempfile
 from urllib.parse import parse_qs, urlsplit
 
 __version__ = "1.1.6"
@@ -61,9 +63,36 @@ def get_meeting_names() -> list[str]:
 
 
 def write_to_meeting_file(contents: dict) -> None:
+    """Write the meetings JSON atomically.
+
+    Strategy: write the new content to a sibling tempfile, ``fsync`` to flush
+    the page cache, then ``os.replace`` (which is atomic on POSIX and on
+    Windows for files on the same filesystem) to swap it into place. This
+    prevents partial-write corruption if the process is killed mid-write or
+    the system crashes — readers will see either the old file or the new
+    file, never a half-written one.
+    """
     _ensure_storage()
-    with open(SAVE_FILE_PATH, "w") as file:
-        file.write(dict_to_json_string(contents))
+    payload = dict_to_json_string(contents)
+    dir_name = os.path.dirname(SAVE_FILE_PATH) or "."
+    # delete=False because we hand the path to os.replace ourselves.
+    fd, tmp_path = _mkstemp_for(dir_name)
+    try:
+        with os.fdopen(fd, "w") as file:
+            file.write(payload)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(tmp_path, SAVE_FILE_PATH)
+    except Exception:
+        # Best-effort cleanup; suppress errors so the original exception wins.
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+
+
+def _mkstemp_for(directory: str) -> tuple[int, str]:
+    """Wrap ``tempfile.mkstemp`` for this module so tests can stub it cleanly."""
+    return tempfile.mkstemp(prefix=".meetings.", suffix=".tmp", dir=directory)
 
 
 def is_command_available(command: str) -> bool:

@@ -198,3 +198,55 @@ def test_strip_url_scheme_strips_https() -> None:
 
 def test_strip_url_scheme_strips_zoommtg() -> None:
     assert utils_mod.strip_url_scheme("zoommtg://zoom.us/j/2?pwd=xyz") == "zoom.us/j/2?pwd=xyz"
+
+
+# ---- atomic write_to_meeting_file ---------------------------------------
+
+
+def test_write_to_meeting_file_is_atomic_uses_replace(tmp_zoom_cli_home: Path) -> None:
+    """Verify the temp-then-replace flow happens — a tempfile must be written
+    in the same dir as the target, then renamed onto it."""
+    payload = {"team": {"id": "1"}}
+    utils_mod.write_to_meeting_file(payload)
+
+    target = tmp_zoom_cli_home / "meetings.json"
+    on_disk = json.loads(target.read_text())
+    assert on_disk == payload
+
+    # No leftover tempfiles in the dir.
+    leftovers = [p for p in tmp_zoom_cli_home.iterdir() if p.name != "meetings.json"]
+    assert leftovers == [], f"unexpected leftover files: {leftovers}"
+
+
+def test_write_to_meeting_file_does_not_corrupt_on_error(
+    tmp_zoom_cli_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the write fails after the tempfile is created, the original
+    meetings.json must remain intact."""
+    # Seed a known good file.
+    target = tmp_zoom_cli_home / "meetings.json"
+    target.write_text('{"original": {"id": "999"}}')
+
+    # Make os.replace raise to simulate a mid-replace failure.
+    def boom(*_args, **_kwargs):
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(utils_mod.os, "replace", boom)
+
+    with pytest.raises(OSError, match="simulated replace failure"):
+        utils_mod.write_to_meeting_file({"new": {"id": "111"}})
+
+    # Original content must still be there.
+    on_disk = json.loads(target.read_text())
+    assert on_disk == {"original": {"id": "999"}}
+
+    # Tempfile must have been cleaned up.
+    leftovers = [p for p in tmp_zoom_cli_home.iterdir() if p.name != "meetings.json"]
+    assert leftovers == [], f"tempfile leak: {leftovers}"
+
+
+def test_write_to_meeting_file_round_trips_unicode(tmp_zoom_cli_home: Path) -> None:
+    payload = {"meeting-with-emoji-🚀": {"password": "p@ss-Ω"}}
+    utils_mod.write_to_meeting_file(payload)
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    assert on_disk == payload

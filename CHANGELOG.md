@@ -35,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced `subprocess.run(..., shell=True)` in `is_command_available` with `shutil.which`. The previous shell call was only ever invoked with literal command names, but `shutil.which` is the idiomatic, no-shell spelling.
 - Documented plain-text password storage as a known issue; tracked in #5 for a follow-up PR (OS keyring migration).
 
+### Changed (PR [#27](https://github.com/jordan8037310/zoom-cli/pull/27) — partial #24)
+- `write_to_meeting_file` now writes atomically: serialize to a sibling tempfile, `fsync`, then `os.replace` onto `meetings.json`. A crash or kill mid-write can no longer corrupt the file — readers see either the old or the new version, never a partial JSON.
+- `zoom rm` gains `--dry-run` (preview) and `--yes`/`-y` (skip confirmation) flags.
+- When a meeting name is **picked interactively** by `zoom rm`, a confirmation prompt now fires before deletion (the new safety net catches miss-clicks). `zoom rm <name>` with a positional argument still deletes immediately — no behavior change for scripts/aliases.
+- Schema versioning and `--dry-run` on future API `delete` commands deferred to a follow-up PR.
+
 ### Changed (PR [#26](https://github.com/jordan8037310/zoom-cli/pull/26) — closes #6)
 - `_launch_name` URL parsing now uses `urllib.parse.urlsplit` + `parse_qs` instead of brittle `str.index`/`min(..., float("inf"))` slicing. Personal links (`/s/<name>`), web-client URLs (`/wc/...`), URLs with fragments, and URLs with `pwd=` not as the first query parameter all work now where they previously crashed with `ValueError`.
 - `_launch_name` correctly URL-decodes percent-encoded passwords (`pwd=hello%20world` → `hello world`).

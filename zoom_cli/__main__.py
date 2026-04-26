@@ -97,13 +97,39 @@ def edit(name, url, id, password):
 
 @main.command(help="Delete meeting")
 @click.argument("name", required=False)
-def rm(name):
-    if not name:
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Show what would be deleted without modifying meetings.json.",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt that fires when the name is picked interactively.",
+)
+def rm(name, dry_run, yes):
+    name_was_picked_interactively = not name
+    if name_was_picked_interactively:
         choices = get_meeting_names()
         if not choices:
             click.echo("No saved meetings to remove.")
             return
         name = _ask_or_abort(questionary.select("Meeting name:", choices=choices))
+
+    if dry_run:
+        click.echo(f"[dry-run] Would remove meeting: {name}")
+        return
+
+    # Only confirm if the name came from the interactive selector — a positional
+    # `zoom rm <name>` is already a deliberate choice, and adding a prompt would
+    # break existing scripts and aliases.
+    needs_confirm = name_was_picked_interactively and not yes
+    if needs_confirm and not click.confirm(f"Remove meeting '{name}'?", default=False):
+        click.echo("Aborted.")
+        return
 
     _remove(name)
 
