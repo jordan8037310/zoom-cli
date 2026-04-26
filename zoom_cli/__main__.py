@@ -1,8 +1,10 @@
 import click
+import httpx
 import questionary
 from click_default_group import DefaultGroup
 
 from zoom_cli import auth
+from zoom_cli.api import oauth
 from zoom_cli.commands import (
     _edit,
     _launch_name,
@@ -179,6 +181,45 @@ def s2s_set(account_id, client_id, client_secret):
         )
     )
     click.echo("Server-to-Server OAuth credentials saved.")
+
+
+@s2s.command(
+    "test",
+    help="Verify saved Server-to-Server OAuth credentials by exchanging them for a token.",
+)
+def s2s_test():
+    creds = auth.load_s2s_credentials()
+    if creds is None:
+        click.echo("No Server-to-Server OAuth credentials saved. Run `zoom auth s2s set` first.")
+        raise click.exceptions.Exit(code=1)
+
+    try:
+        token = oauth.fetch_access_token(creds)
+    except oauth.ZoomAuthError as exc:
+        message = str(exc) or "(no message)"
+        if exc.status_code is not None:
+            click.echo(f"Authentication failed (HTTP {exc.status_code}): {message}")
+        else:
+            click.echo(f"Authentication failed: {message}")
+        raise click.exceptions.Exit(code=1) from exc
+    except httpx.HTTPError as exc:
+        # Network / TLS / timeout — the request never got an HTTP response
+        # we can interpret. Distinguish from auth failures so the user
+        # knows whether to check creds or check connectivity.
+        click.echo(f"Could not reach Zoom OAuth endpoint: {exc}")
+        raise click.exceptions.Exit(code=1) from exc
+
+    minutes = max(int((token.expires_at - _now()).total_seconds() // 60), 0)
+    click.echo(f"OK — Server-to-Server OAuth credentials valid (token expires in {minutes}m).")
+    if token.scopes:
+        click.echo(f"Scopes: {' '.join(token.scopes)}")
+
+
+def _now():
+    """Indirection for ``datetime.now`` so tests can monkeypatch it cleanly."""
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc)
 
 
 @auth_cmd.command(help="Show which authentication mode is configured.")

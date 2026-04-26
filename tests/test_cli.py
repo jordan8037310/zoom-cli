@@ -238,6 +238,90 @@ def test_auth_s2s_set_does_not_echo_secret_in_output(runner: CliRunner) -> None:
     assert secret not in result.output
 
 
+# ---- zoom auth s2s test (issue #11 part 2) -------------------------------
+
+
+def test_auth_s2s_test_bails_when_no_credentials_saved(runner: CliRunner) -> None:
+    """`zoom auth s2s test` with nothing configured: print a helpful
+    message and exit non-zero so scripts can detect the unconfigured state."""
+    result = runner.invoke(main, ["auth", "s2s", "test"])
+    assert result.exit_code == 1
+    assert "No Server-to-Server" in result.output
+    assert "zoom auth s2s set" in result.output
+
+
+def test_auth_s2s_test_success_prints_ok_and_scopes(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    import zoom_cli.__main__ as main_mod
+    from zoom_cli import auth
+    from zoom_cli.api import oauth
+
+    auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
+
+    fake_token_value = "very-secret-do-not-leak-bearer-12345"
+    fake_token = oauth.AccessToken(
+        value=fake_token_value,
+        expires_at=datetime.now(timezone.utc) + timedelta(seconds=3600),
+        scopes=("user:read:user", "meeting:read:meeting"),
+    )
+    monkeypatch.setattr(main_mod.oauth, "fetch_access_token", lambda *_a, **_k: fake_token)
+
+    result = runner.invoke(main, ["auth", "s2s", "test"])
+    assert result.exit_code == 0, result.output
+    assert "OK" in result.output
+    assert "user:read:user" in result.output
+    assert "meeting:read:meeting" in result.output
+    # The bearer token value itself must never reach stdout.
+    assert fake_token_value not in result.output
+
+
+def test_auth_s2s_test_reports_zoom_auth_error(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import zoom_cli.__main__ as main_mod
+    from zoom_cli import auth
+    from zoom_cli.api import oauth
+
+    auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
+
+    def boom(*_a, **_k):
+        raise oauth.ZoomAuthError(
+            "Invalid client_id or client_secret", status_code=401, error_code="invalid_client"
+        )
+
+    monkeypatch.setattr(main_mod.oauth, "fetch_access_token", boom)
+
+    result = runner.invoke(main, ["auth", "s2s", "test"])
+    assert result.exit_code == 1
+    assert "401" in result.output
+    assert "Invalid client_id" in result.output
+
+
+def test_auth_s2s_test_reports_network_error_distinctly(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Distinguish 'creds rejected' from 'couldn't reach Zoom' — the user
+    needs to know which one to debug."""
+    import httpx
+    import zoom_cli.__main__ as main_mod
+    from zoom_cli import auth
+
+    auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
+
+    def boom(*_a, **_k):
+        raise httpx.ConnectError("DNS failed")
+
+    monkeypatch.setattr(main_mod.oauth, "fetch_access_token", boom)
+
+    result = runner.invoke(main, ["auth", "s2s", "test"])
+    assert result.exit_code == 1
+    assert "Could not reach" in result.output
+    assert "DNS failed" in result.output
+
+
 def test_auth_s2s_set_aborts_on_ctrl_c_at_account_prompt(
     runner: CliRunner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
