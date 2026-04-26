@@ -238,6 +238,94 @@ def test_auth_s2s_set_does_not_echo_secret_in_output(runner: CliRunner) -> None:
     assert secret not in result.output
 
 
+# ---- zoom users me (PR #31) ----------------------------------------------
+
+
+def test_users_me_bails_when_no_credentials_saved(runner: CliRunner) -> None:
+    result = runner.invoke(main, ["users", "me"])
+    assert result.exit_code == 1
+    assert "No Server-to-Server" in result.output
+
+
+def test_users_me_prints_well_known_fields(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import zoom_cli.__main__ as main_mod
+    from zoom_cli import auth
+
+    auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
+
+    fake_profile = {
+        "id": "user-abc",
+        "account_id": "acc-xyz",
+        "email": "alice@example.com",
+        "display_name": "Alice Example",
+        "type": 2,
+        "status": "active",
+        # Some fields we don't expect to print:
+        "phone_number": "+1-555-0100",
+        "language": "en-US",
+    }
+
+    def fake_get_me(_client):
+        return fake_profile
+
+    monkeypatch.setattr(main_mod.users, "get_me", fake_get_me)
+    # Stub out the OAuth round-trip — ApiClient is created but never exchanges tokens
+    # because get_me is replaced wholesale.
+    monkeypatch.setattr(
+        main_mod.oauth,
+        "fetch_access_token",
+        lambda *_a, **_k: _fake_access_token(),
+    )
+
+    result = runner.invoke(main, ["users", "me"])
+    assert result.exit_code == 0, result.output
+    assert "alice@example.com" in result.output
+    assert "Alice Example" in result.output
+    assert "user-abc" in result.output
+    assert "acc-xyz" in result.output
+    # We don't print every field — phone_number shouldn't appear
+    assert "phone_number" not in result.output
+
+
+def test_users_me_reports_zoom_api_error_distinctly(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import zoom_cli.__main__ as main_mod
+    from zoom_cli import auth
+    from zoom_cli.api.client import ZoomApiError
+
+    auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
+
+    def boom(_client):
+        raise ZoomApiError("Something broke", status_code=500, code=9999)
+
+    monkeypatch.setattr(main_mod.users, "get_me", boom)
+    monkeypatch.setattr(
+        main_mod.oauth,
+        "fetch_access_token",
+        lambda *_a, **_k: _fake_access_token(),
+    )
+
+    result = runner.invoke(main, ["users", "me"])
+    assert result.exit_code == 1
+    assert "500" in result.output
+    assert "Something broke" in result.output
+
+
+def _fake_access_token():
+    from datetime import datetime, timedelta, timezone
+
+    from zoom_cli.api import oauth
+
+    return oauth.AccessToken(
+        value="tok",
+        expires_at=datetime.now(timezone.utc) + timedelta(seconds=3600),
+        scopes=("user:read:user",),
+    )
+
+
 # ---- zoom auth s2s test (issue #11 part 2) -------------------------------
 
 

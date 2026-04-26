@@ -35,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced `subprocess.run(..., shell=True)` in `is_command_available` with `shutil.which`. The previous shell call was only ever invoked with literal command names, but `shutil.which` is the idiomatic, no-shell spelling.
 - Documented plain-text password storage as a known issue; tracked in #5 for a follow-up PR (OS keyring migration).
 
+### Added (PR [#31](https://github.com/jordan8037310/zoom-cli/pull/31) — partial #14, first downstream API call)
+- New authenticated `ApiClient` class (`zoom_cli/api/client.py`): wraps `httpx.Client`, injects `Authorization: Bearer <token>` on every request, caches the access token in-memory until expiry, raises `ZoomApiError` (with `status_code` + Zoom's `code` field) on non-2xx responses.
+- New `zoom_cli/api/users.py::get_me` helper for `GET /users/me`.
+- New `zoom users me` CLI subcommand: prints the authenticated user's display_name, email, id, account_id, type, and status. Distinguishes `ZoomAuthError` (HTTP 401 from token endpoint), `ZoomApiError` (HTTP error from the Users API), and `httpx.HTTPError` (network/TLS failure) so users know whether to debug creds, scopes, or connectivity.
+- API base URL `https://api.zoom.us/v2` pinned by a test.
+
 ### Added (PR [#30](https://github.com/jordan8037310/zoom-cli/pull/30) — closes #11)
 - New `zoom auth s2s test` command exchanges saved Server-to-Server OAuth credentials for an access token and reports back ("OK" with token-expiry minutes and granted scopes, or a typed error message). Distinguishes "credentials rejected" (HTTP status from Zoom) from "couldn't reach api.zoom.us" (network/TLS failure) so the user knows where to look.
 - New `zoom_cli/api/` subpackage seeding the REST API client surface. First module: `oauth.py` with `AccessToken` dataclass (with `is_expired` property), `ZoomAuthError` exception (carrying status_code + error_code + reason), and `fetch_access_token(creds)` against `https://zoom.us/oauth/token` using HTTP Basic auth.
