@@ -1,7 +1,7 @@
 """Shared pytest fixtures.
 
-These fixtures isolate every test from the user's real ``~/.zoom-cli`` directory
-and from launching real subprocesses.
+These fixtures isolate every test from the user's real ``~/.zoom-cli`` directory,
+the user's real OS keyring, and from launching real subprocesses.
 """
 
 from __future__ import annotations
@@ -10,7 +10,48 @@ import json
 import subprocess
 from pathlib import Path
 
+import keyring
+import keyring.backend
 import pytest
+
+
+class _InMemoryKeyring(keyring.backend.KeyringBackend):
+    """Tiny in-memory keyring backend for tests; isolates from the real OS keyring."""
+
+    priority = 1  # type: ignore[assignment]
+
+    def __init__(self) -> None:
+        self._store: dict[tuple[str, str], str] = {}
+
+    def get_password(self, service: str, username: str) -> str | None:
+        return self._store.get((service, username))
+
+    def set_password(self, service: str, username: str, password: str) -> None:
+        self._store[(service, username)] = password
+
+    def delete_password(self, service: str, username: str) -> None:
+        if (service, username) not in self._store:
+            import keyring.errors
+
+            raise keyring.errors.PasswordDeleteError(f"{service}:{username} not set")
+        del self._store[(service, username)]
+
+
+@pytest.fixture(autouse=True)
+def isolated_keyring() -> _InMemoryKeyring:
+    """Replace the real OS keyring with an in-memory one for every test.
+
+    Autouse so no test can accidentally read or write the developer's real
+    keychain. Returns the backend instance so individual tests can pre-seed
+    it if needed.
+    """
+    backend = _InMemoryKeyring()
+    previous = keyring.get_keyring()
+    keyring.set_keyring(backend)
+    try:
+        yield backend
+    finally:
+        keyring.set_keyring(previous)
 
 
 @pytest.fixture

@@ -1,6 +1,7 @@
 import click
 import questionary
 
+from zoom_cli import secrets
 from zoom_cli.utils import (
     ConsoleColor,
     LauncherUnavailableError,
@@ -11,6 +12,24 @@ from zoom_cli.utils import (
     strip_url_scheme,
     write_to_meeting_file,
 )
+
+
+def _resolve_password(name: str, entry: dict, url_password: str = "") -> str:
+    """Pick the right password for a saved meeting.
+
+    Resolution order:
+    1. OS keyring (new entries land here as of #5).
+    2. Plaintext ``password`` field in ``meetings.json`` (back-compat for
+       entries saved before keyring migration).
+    3. ``pwd=`` extracted from the saved URL.
+
+    Empty strings count as a deliberate "no password" — only ``None`` from
+    the keyring falls through to step 2.
+    """
+    keyring_pw = secrets.get_password(name)
+    if keyring_pw is not None:
+        return keyring_pw
+    return entry.get("password", url_password)
 
 
 def _print_error(message: str) -> None:
@@ -46,11 +65,7 @@ def _launch_name(name: str) -> None:
     try:
         if "url" in entry:
             meeting_id, url_password = parse_meeting_url(entry["url"])
-            # Presence-check via dict.get: a deliberately empty saved password
-            # ({"password": ""}) returns "" — meaning "no password" — rather
-            # than falling back to url_password. Preserves the contract from
-            # PR #25 where `_edit` lets users intentionally clear a field.
-            password = entry.get("password", url_password)
+            password = _resolve_password(name, entry, url_password)
 
             if meeting_id is not None:
                 launch_zoommtg(meeting_id, password)
@@ -66,7 +81,7 @@ def _launch_name(name: str) -> None:
             return
 
         if "id" in entry:
-            launch_zoommtg(entry["id"], entry.get("password", ""))
+            launch_zoommtg(entry["id"], _resolve_password(name, entry))
             return
 
         _print_error(
@@ -83,17 +98,21 @@ def _launch_name(name: str) -> None:
 def _save_url(name, url, password):
     contents = get_meeting_file_contents()
     contents[name] = {"url": url}
-    if password:
-        contents[name]["password"] = password
     write_to_meeting_file(contents)
+    if password:
+        secrets.set_password(name, password)
+    else:
+        secrets.delete_password(name)
 
 
 def _save_id_password(name, id, password):
     contents = get_meeting_file_contents()
     contents[name] = {"id": id}
-    if password:
-        contents[name]["password"] = password
     write_to_meeting_file(contents)
+    if password:
+        secrets.set_password(name, password)
+    else:
+        secrets.delete_password(name)
 
 
 def _edit(name, url, id, password):
@@ -104,13 +123,17 @@ def _edit(name, url, id, password):
         new_dict["url"] = url
     if id:
         new_dict["id"] = id
-    if password:
-        new_dict["password"] = password
 
-    # For each existing field, re-prompt with the new value (if a flag was
-    # passed) or the old value as the default. The user can intentionally
-    # clear a field by submitting an empty string; only Ctrl-C aborts.
+    # For each existing non-secret field, re-prompt with the new value (if a
+    # flag was passed) or the old value as the default. The user can clear a
+    # field by submitting an empty string; only Ctrl-C aborts. Passwords are
+    # NOT re-prompted here — they live in the keyring and are managed via
+    # the explicit ``--password`` flag.
     for key, val in contents[name].items():
+        if key == "password":
+            # Legacy plaintext password from a pre-keyring entry. Skip the
+            # prompt; we'll migrate it to the keyring below.
+            continue
         answer = questionary.text(key, default=new_dict.get(key, val)).ask()
         if answer is None:
             raise click.Abort
@@ -120,11 +143,17 @@ def _edit(name, url, id, password):
     contents[name] = new_dict
     write_to_meeting_file(contents)
 
+    # Password updates go through the keyring. If --password was passed,
+    # update; otherwise leave whatever's already there alone.
+    if password:
+        secrets.set_password(name, password)
+
 
 def _remove(name):
     contents = get_meeting_file_contents()
     del contents[name]
     write_to_meeting_file(contents)
+    secrets.delete_password(name)
 
 
 def _ls():
@@ -136,8 +165,11 @@ def _ls():
             print(ConsoleColor.BOLD + "    url: " + ConsoleColor.END + entries["url"])
         if "id" in entries:
             print(ConsoleColor.BOLD + "    id: " + ConsoleColor.END + entries["id"])
-        if "password" in entries:
-            print(ConsoleColor.BOLD + "    password: " + ConsoleColor.END + entries["password"])
+        # Passwords are masked. They live in the OS keyring (or, for
+        # not-yet-migrated entries, plaintext in meetings.json).
+        has_password = "password" in entries or secrets.get_password(name) is not None
+        if has_password:
+            print(ConsoleColor.BOLD + "    password: " + ConsoleColor.END + "********")
 
         if idx < len(meetings) - 1:
             print()

@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced `subprocess.run(..., shell=True)` in `is_command_available` with `shutil.which`. The previous shell call was only ever invoked with literal command names, but `shutil.which` is the idiomatic, no-shell spelling.
 - Documented plain-text password storage as a known issue; tracked in #5 for a follow-up PR (OS keyring migration).
 
+### Security (PR [#28](https://github.com/jordan8037310/zoom-cli/pull/28) — closes #5)
+- New meeting passwords now go to the OS keyring (Keychain on macOS, libsecret/Secret-Service on Linux, Credential Manager on Windows) under service `zoom-cli` keyed by meeting name — they no longer land in plaintext in `~/.zoom-cli/meetings.json`.
+- `zoom ls` masks passwords as `********` regardless of where they came from. Even legacy plaintext-in-JSON passwords are now hidden in the listing.
+- `zoom rm <name>` deletes the matching keyring entry alongside the JSON entry, so freed names don't leave orphan secrets.
+- `zoom edit` no longer re-prompts for the `password` field (which would have shown the current value as a default — leaking it on screen). Use `--password` to update.
+- Back-compat: `_launch_name` reads the keyring first, then falls back to plaintext-in-JSON. Existing users keep working without action; any subsequent `zoom save` migrates that meeting's password to the keyring.
+- Auto-migration of existing plaintext passwords (one-shot scan + redaction with a `version` field) is intentionally **not** done in this PR; it'll come as a separate, opt-in step.
+
 ### Changed (PR [#27](https://github.com/jordan8037310/zoom-cli/pull/27) — partial #24)
 - `write_to_meeting_file` now writes atomically: serialize to a sibling tempfile, `fsync`, then `os.replace` onto `meetings.json`. A crash or kill mid-write can no longer corrupt the file — readers see either the old or the new version, never a partial JSON.
 - `zoom rm` gains `--dry-run` (preview) and `--yes`/`-y` (skip confirmation) flags.
