@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Modern `pyproject.toml` packaging (PEP 621) with `dev` and `build` extras.
-- GitHub Actions CI: ruff lint, mypy, pytest with coverage on Python 3.10–3.13 across Ubuntu and macOS.
+- GitHub Actions CI: ruff lint, mypy, pytest with coverage on Python 3.10–3.13 across Ubuntu and macOS. CI fires on every PR regardless of base branch (so stacked PRs are covered).
 - Initial `pytest` test suite covering `zoom_cli.utils` and `zoom_cli.commands`.
 - Project-level `CLAUDE.md` with developer workflow and conventions.
 - Project-level `CHANGELOG.md` (this file).
