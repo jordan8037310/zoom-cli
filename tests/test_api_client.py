@@ -320,3 +320,207 @@ def test_request_does_not_retry_on_non_401_4xx(monkeypatch: pytest.MonkeyPatch) 
 
     assert request_count["n"] == 1  # no retry
     assert fetch_calls["n"] == 1
+
+
+# ---- #16: 429 / Retry-After handling ------------------------------------
+
+
+def test_request_retries_429_and_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """First response 429 with Retry-After: 0; second response 200."""
+    monkeypatch.setattr(oauth, "fetch_access_token", lambda *_a, **_k: _fresh_token())
+    sleeps: list[float] = []
+    monkeypatch.setattr(client_mod.time, "sleep", lambda s: sleeps.append(s))
+
+    request_count = {"n": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        request_count["n"] += 1
+        if request_count["n"] == 1:
+            return httpx.Response(
+                429,
+                headers={"Retry-After": "0"},
+                json={"code": 429, "message": "Too many requests"},
+            )
+        return httpx.Response(200, json={"id": "u-ok"})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    with ApiClient(_creds(), http_client=http) as c:
+        result = c.get("/users/me")
+
+    assert result == {"id": "u-ok"}
+    assert request_count["n"] == 2
+    assert len(sleeps) == 1  # one sleep before the retry
+    assert sleeps[0] >= 0  # jittered around 0
+
+
+def test_request_honours_retry_after_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Retry-After: 5 should produce a sleep of ~5 (4-6 with ±20% jitter)."""
+    monkeypatch.setattr(oauth, "fetch_access_token", lambda *_a, **_k: _fresh_token())
+    sleeps: list[float] = []
+    monkeypatch.setattr(client_mod.time, "sleep", lambda s: sleeps.append(s))
+
+    request_count = {"n": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        request_count["n"] += 1
+        if request_count["n"] == 1:
+            return httpx.Response(
+                429,
+                headers={"Retry-After": "5"},
+                json={"code": 429},
+            )
+        return httpx.Response(200, json={})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    with ApiClient(_creds(), http_client=http) as c:
+        c.get("/users/me")
+
+    assert len(sleeps) == 1
+    # JITTER_RANGE is 0.2 → sleep is 5 * (0.8 to 1.2) = 4.0 to 6.0
+    assert 4.0 <= sleeps[0] <= 6.0
+
+
+def test_request_caps_retry_at_max_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pathological Retry-After must not produce an unbounded sleep."""
+    monkeypatch.setattr(oauth, "fetch_access_token", lambda *_a, **_k: _fresh_token())
+    sleeps: list[float] = []
+    monkeypatch.setattr(client_mod.time, "sleep", lambda s: sleeps.append(s))
+
+    request_count = {"n": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        request_count["n"] += 1
+        if request_count["n"] == 1:
+            return httpx.Response(
+                429,
+                headers={"Retry-After": "9999"},
+                json={"code": 429},
+            )
+        return httpx.Response(200, json={})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    with ApiClient(_creds(), http_client=http) as c:
+        c.get("/users/me")
+
+    # Capped at MAX_RETRY_DELAY_SECONDS (60s) ± jitter (0.8-1.2x) = 48-72.
+    # 60 * 1.2 = 72 is the upper bound.
+    assert sleeps[0] <= client_mod.MAX_RETRY_DELAY_SECONDS * (1.0 + client_mod.JITTER_RANGE)
+
+
+def test_request_falls_back_to_exponential_backoff_without_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two consecutive 429s with no Retry-After: backoff doubles."""
+    monkeypatch.setattr(oauth, "fetch_access_token", lambda *_a, **_k: _fresh_token())
+    sleeps: list[float] = []
+    monkeypatch.setattr(client_mod.time, "sleep", lambda s: sleeps.append(s))
+
+    request_count = {"n": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        request_count["n"] += 1
+        if request_count["n"] <= 2:
+            return httpx.Response(429, json={"code": 429})
+        return httpx.Response(200, json={})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    with ApiClient(_creds(), http_client=http) as c:
+        c.get("/users/me")
+
+    assert request_count["n"] == 3  # two 429s + success
+    assert len(sleeps) == 2
+    # attempt 0: 2**0 = 1 → 0.8-1.2; attempt 1: 2**1 = 2 → 1.6-2.4
+    assert 0.8 <= sleeps[0] <= 1.2
+    assert 1.6 <= sleeps[1] <= 2.4
+
+
+def test_request_propagates_after_max_429_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If Zoom never relents, surface the 429 as ZoomApiError after
+    MAX_429_RETRIES attempts. No infinite loop."""
+    monkeypatch.setattr(oauth, "fetch_access_token", lambda *_a, **_k: _fresh_token())
+    monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+
+    request_count = {"n": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        request_count["n"] += 1
+        return httpx.Response(429, json={"code": 429, "message": "still throttled"})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    with (
+        ApiClient(_creds(), http_client=http) as c,
+        pytest.raises(client_mod.ZoomApiError) as excinfo,
+    ):
+        c.get("/users/me")
+
+    assert excinfo.value.status_code == 429
+    # Initial attempt + MAX_429_RETRIES retries.
+    assert request_count["n"] == 1 + client_mod.MAX_429_RETRIES
+
+
+def test_request_handles_http_date_retry_after(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Retry-After can be an HTTP-date (RFC 7231)."""
+    import email.utils
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setattr(oauth, "fetch_access_token", lambda *_a, **_k: _fresh_token())
+    sleeps: list[float] = []
+    monkeypatch.setattr(client_mod.time, "sleep", lambda s: sleeps.append(s))
+
+    target = datetime.now(timezone.utc) + timedelta(seconds=3)
+    http_date = email.utils.format_datetime(target)
+
+    request_count = {"n": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        request_count["n"] += 1
+        if request_count["n"] == 1:
+            return httpx.Response(429, headers={"Retry-After": http_date}, json={"code": 429})
+        return httpx.Response(200, json={})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    with ApiClient(_creds(), http_client=http) as c:
+        c.get("/users/me")
+
+    assert len(sleeps) == 1
+    # ~3 seconds ± jitter ± a fraction-of-a-second clock variance.
+    assert 1.5 <= sleeps[0] <= 4.5
+
+
+def test_request_does_not_retry_5xx_as_429(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 500/503 must not enter the 429 retry path — propagate immediately."""
+    monkeypatch.setattr(oauth, "fetch_access_token", lambda *_a, **_k: _fresh_token())
+    sleeps: list[float] = []
+    monkeypatch.setattr(client_mod.time, "sleep", lambda s: sleeps.append(s))
+
+    request_count = {"n": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        request_count["n"] += 1
+        return httpx.Response(503, json={"code": 503, "message": "Service unavailable"})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    with (
+        ApiClient(_creds(), http_client=http) as c,
+        pytest.raises(client_mod.ZoomApiError) as excinfo,
+    ):
+        c.get("/users/me")
+
+    assert excinfo.value.status_code == 503
+    assert request_count["n"] == 1  # no retry on 503
+    assert sleeps == []
+
+
+# ---- #16 constants pinned -----------------------------------------------
+
+
+def test_max_429_retries_pinned() -> None:
+    assert client_mod.MAX_429_RETRIES == 3
+
+
+def test_max_retry_delay_pinned() -> None:
+    assert client_mod.MAX_RETRY_DELAY_SECONDS == 60.0
+
+
+def test_jitter_range_pinned() -> None:
+    assert client_mod.JITTER_RANGE == 0.2

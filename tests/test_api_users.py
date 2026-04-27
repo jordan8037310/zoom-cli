@@ -66,3 +66,36 @@ def test_get_me_is_alias_for_get_user_me() -> None:
     users.get_me(fake_client)
 
     fake_client.get.assert_called_once_with("/users/me")
+
+
+# ---- #16: list_users via paginate ---------------------------------------
+
+
+def test_list_users_yields_across_pages() -> None:
+    """list_users walks the next_page_token cursor end-to-end."""
+    pages = [
+        {"users": [{"id": "u1"}, {"id": "u2"}], "next_page_token": "tok-2"},
+        {"users": [{"id": "u3"}], "next_page_token": ""},
+    ]
+    fake_client = MagicMock()
+    fake_client.get.side_effect = pages
+
+    result = list(users.list_users(fake_client))
+
+    assert result == [{"id": "u1"}, {"id": "u2"}, {"id": "u3"}]
+    # Two GETs, both to /users with status=active.
+    assert fake_client.get.call_count == 2
+    first_call_args = fake_client.get.call_args_list[0]
+    assert first_call_args[0][0] == "/users"
+    assert first_call_args[1]["params"]["status"] == "active"
+    assert first_call_args[1]["params"]["page_size"] == 300
+
+
+def test_list_users_passes_status_filter() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {"users": [], "next_page_token": ""}
+
+    list(users.list_users(fake_client, status="pending"))
+
+    params = fake_client.get.call_args_list[0][1]["params"]
+    assert params["status"] == "pending"

@@ -8,8 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 > Bootstrap PR: [#25](https://github.com/jordan8037310/zoom-cli/pull/25) — closes #4, #7, #8 and partially addresses #9, #10.
-> Codex review follow-ups (PR #32): closes #34, #35, #36, #37, #38, #39, #40, #41, #42, #43, #44, #45, #46, #47 (all 14 findings from Codex's PR #32 review).
-> CC security setup (this branch): adds `.claude/settings.json`, `SECURITY.md`, `LOCAL-SECURITY.md`, `TASKS.md`, and three FACET developer skills.
+> Codex review follow-ups (PR #32): closes #34, #35, #36, #37, #38, #39, #40, #41, #42, #43, #44, #45, #46, #47.
+> CC security setup (PR #33): adds `.claude/settings.json`, `SECURITY.md`, `LOCAL-SECURITY.md`, `TASKS.md`, and three FACET developer skills.
+> Rate-limit + pagination (this branch): closes #16 (partial — per-tier token bucket deferred). 429/Retry-After backoff with jitter; `paginate()` generator helper; `users.list_users()` as the first paginated endpoint.
+
+### Added (issue #16)
+- New `zoom_cli/api/pagination.py` with `paginate(client, path, *, item_key, params, page_size)` generator. Walks Zoom's `next_page_token` cursor, yielding each item across all pages. Lazy — pages are fetched on demand.
+- `zoom_cli/api/users.py::list_users(client, *, status, page_size)` — first consumer of `paginate`. Yields user records across the `/users` endpoint; default `page_size=300` matches Zoom's per-endpoint cap.
+- `MAX_429_RETRIES` (3), `MAX_RETRY_DELAY_SECONDS` (60), `JITTER_RANGE` (0.2) constants exposed by `zoom_cli/api/client.py`.
+
+### Changed (issue #16)
+- `ApiClient.request` now retries 429 responses up to `MAX_429_RETRIES` times. Honours `Retry-After` (delta-seconds or HTTP-date per RFC 7231); falls back to exponential backoff (`2^attempt`) when the header is missing. Always caps any single sleep at `MAX_RETRY_DELAY_SECONDS` and applies ±20% jitter so cooperating processes don't thunder back together.
+- After `MAX_429_RETRIES` exhaustion, the 429 propagates as `ZoomApiError` so callers can decide what to do (skip, alert, defer).
+
+### Deferred (issue #16 follow-up)
+- Per-tier token-bucket rate limiting (Light 80/s, Medium 60/s, Heavy 40/s + 60k/day, Resource-intensive 20/s + 60k/day). Best done after more endpoints land so the per-endpoint tier mapping isn't speculative.
 
 ### Security (Codex review follow-ups)
 - **#34 (High)** — `zoom auth s2s set` no longer accepts `--client-secret` as a CLI flag. Values in argv landed in shell history and were visible via `ps`/proc to other users on the host. New contract: `ZOOM_CLIENT_SECRET` env var or masked `questionary.password()` prompt only. `--account-id` and `--client-id` still accept flags (public-ish identifiers) and pick up `ZOOM_ACCOUNT_ID` / `ZOOM_CLIENT_ID` env vars.
