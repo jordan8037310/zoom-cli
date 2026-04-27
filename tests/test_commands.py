@@ -180,22 +180,33 @@ def test_launch_name_web_client_url_falls_back(
     assert captured_launches == [["open", "zoommtg://zoom.us/wc/123/join?pwd=abc"]]
 
 
-def test_launch_name_decodes_percent_encoded_password(
+def test_launch_name_round_trips_percent_encoded_password(
     write_meetings, captured_launches: list[list[str]]
 ) -> None:
-    """``parse_qs`` URL-decodes the password before we re-build the
-    zoommtg URL, so a percent-encoded ``#`` round-trips correctly."""
+    """``parse_qs`` URL-decodes the password from the saved URL, then the
+    launcher re-encodes it when building the zoommtg URL (closes #37). The
+    decoded round-trip must yield the original byte-for-byte."""
+    from urllib.parse import parse_qs, urlsplit
+
     write_meetings({"team": {"url": "https://zoom.us/j/123?pwd=ab%23cd"}})
     commands_mod._launch_name("team")
-    assert captured_launches == [["open", "zoommtg://zoom.us/join?confno=123&pwd=ab#cd"]]
+    assert len(captured_launches) == 1
+    argv = captured_launches[0]
+    assert argv[0] == "open"
+    pwd_values = parse_qs(urlsplit(argv[1]).query).get("pwd", [])
+    assert pwd_values == ["ab#cd"]
 
 
-def test_launch_name_decodes_space_in_password(
+def test_launch_name_round_trips_space_in_password(
     write_meetings, captured_launches: list[list[str]]
 ) -> None:
+    from urllib.parse import parse_qs, urlsplit
+
     write_meetings({"team": {"url": "https://zoom.us/j/123?pwd=hello%20world"}})
     commands_mod._launch_name("team")
-    assert captured_launches == [["open", "zoommtg://zoom.us/join?confno=123&pwd=hello world"]]
+    assert len(captured_launches) == 1
+    pwd_values = parse_qs(urlsplit(captured_launches[0][1]).query).get("pwd", [])
+    assert pwd_values == ["hello world"]
 
 
 def test_launch_name_picks_pwd_when_other_query_params_present(

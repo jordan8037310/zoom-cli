@@ -17,7 +17,7 @@ from zoom_cli.commands import (
     _save_id_password,
     _save_url,
 )
-from zoom_cli.utils import __version__, get_meeting_names
+from zoom_cli.utils import __version__, get_meeting_names, looks_like_zoom_url
 
 
 def _ask_or_abort(question):
@@ -44,7 +44,14 @@ def main():
 @main.command(help="Launch meeting [url or saved meeting name]")
 @click.argument("url_or_name")
 def launch(url_or_name):
-    if "://" in url_or_name or "zoom.us" in url_or_name:
+    # Distinguish URL from saved-meeting-name by checking the host, not by
+    # substring match against "zoom.us" — the substring trick mis-routed
+    # deceptive inputs like "https://evil.example/zoom.us/j/1". Closes #38.
+    has_scheme = "://" in url_or_name
+    if has_scheme and not looks_like_zoom_url(url_or_name):
+        click.echo(f"Refusing to launch URL with untrusted host: {url_or_name}", err=True)
+        raise click.exceptions.Exit(code=1)
+    if has_scheme or looks_like_zoom_url(url_or_name):
         _launch_url(url_or_name)
     else:
         _launch_name(url_or_name)

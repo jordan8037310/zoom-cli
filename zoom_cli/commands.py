@@ -5,6 +5,7 @@ from zoom_cli import secrets
 from zoom_cli.utils import (
     ConsoleColor,
     LauncherUnavailableError,
+    UntrustedHostError,
     get_meeting_file_contents,
     launch_zoommtg,
     launch_zoommtg_url,
@@ -40,14 +41,18 @@ def _print_error(message: str) -> None:
 def _launch_url(url: str) -> None:
     """Launch a Zoom meeting from any URL by rewriting the scheme to ``zoommtg://``.
 
-    Accepts URLs with or without an existing scheme. Only catches
-    ``LauncherUnavailableError`` so that genuine bugs propagate instead of
-    being swallowed by a bare ``except``.
+    Accepts URLs with or without an existing scheme. Only catches the
+    expected user-facing error types so that genuine bugs propagate instead
+    of being swallowed by a bare ``except``. ``UntrustedHostError`` is a
+    defense-in-depth catch — the ``launch`` CLI command pre-validates the
+    host, so this path normally only sees trusted URLs.
     """
     rebuilt = f"zoommtg://{strip_url_scheme(url)}"
     try:
         launch_zoommtg_url(rebuilt)
     except LauncherUnavailableError as exc:
+        _print_error(str(exc))
+    except UntrustedHostError as exc:
         _print_error(str(exc))
 
 
@@ -92,6 +97,8 @@ def _launch_name(name: str) -> None:
             + "."
         )
     except LauncherUnavailableError as exc:
+        _print_error(str(exc))
+    except UntrustedHostError as exc:
         _print_error(str(exc))
 
 

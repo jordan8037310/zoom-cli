@@ -6,12 +6,19 @@ import os
 import shutil
 import subprocess
 import tempfile
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 __version__ = "1.1.6"
 
 ZOOM_CLI_DIR = os.path.expanduser("~/.zoom-cli")
 SAVE_FILE_PATH = f"{ZOOM_CLI_DIR}/meetings.json"
+
+#: Allowlist of trusted Zoom hosts. We accept these and any subdomain
+#: thereof (``us02web.zoom.us``, ``mydomain.zoom.us``, ``zoomgov.com``,
+#: ``us02.zoomgov.com``). Anything else is refused at the launch layer
+#: (closes #38). The list is intentionally short — Zoom only operates two
+#: top-level domains for joining meetings.
+TRUSTED_ZOOM_HOSTS: tuple[str, ...] = ("zoom.us", "zoomgov.com")
 
 
 # adopted from: https://stackoverflow.com/questions/8924173/how-do-i-print-bold-text-in-python
@@ -118,15 +125,76 @@ class LauncherUnavailableError(RuntimeError):
     """Neither `open` nor `xdg-open` is available on PATH."""
 
 
+class UntrustedHostError(ValueError):
+    """The URL's host is not in the trusted Zoom domain allowlist (#38)."""
+
+
+def is_trusted_zoom_host(host: str) -> bool:
+    """Return True if ``host`` is on the Zoom allowlist or a subdomain thereof.
+
+    Comparison is case-insensitive. Empty string returns False. Subdomain
+    match requires the suffix to be a proper subdomain (``foo.zoom.us``
+    matches; ``my-zoom.us-domain.com`` does NOT — the trailing ``.zoom.us``
+    must be a domain boundary, not a substring).
+    """
+    if not host:
+        return False
+    normalized = host.lower()
+    return any(
+        normalized == trusted or normalized.endswith("." + trusted)
+        for trusted in TRUSTED_ZOOM_HOSTS
+    )
+
+
+def looks_like_zoom_url(text: str) -> bool:
+    """Return True if ``text`` parses to a URL on a trusted Zoom host.
+
+    Used by the CLI to decide whether ``zoom <arg>`` should be treated as a
+    URL or as a saved-meeting name. Accepts inputs with or without a scheme
+    — ``zoom.us/j/123`` and ``https://zoom.us/j/123`` both return True.
+    Strings without a Zoom host (``meeting-name``, ``https://evil.example/zoom.us/j/1``)
+    return False.
+    """
+    candidate = text if "://" in text else f"https://{text}"
+    try:
+        parsed = urlsplit(candidate)
+    except ValueError:
+        return False
+    return is_trusted_zoom_host(parsed.hostname or "")
+
+
 def launch_zoommtg_url(url: str, password: str = "") -> None:
     """Launch the Zoom desktop client for ``url``.
 
     Uses argv-list ``subprocess.run`` (not the shell) so that meeting URLs and
     passwords containing shell metacharacters (``"``, `` ` ``, ``$``, ``;``)
-    cannot be interpreted as shell syntax. Closes #4.
+    cannot be interpreted as shell syntax (closes #4).
+
+    Validates the URL host against :data:`TRUSTED_ZOOM_HOSTS` before
+    launching; raises :class:`UntrustedHostError` for anything else
+    (closes #38). The Zoom desktop client itself would likely reject a
+    non-Zoom ``zoommtg://`` URL, but failing here gives the user a clear
+    error rather than a silent no-op or a confusing client-side dialog.
+
+    URL-encodes ``password`` when building the ``pwd=`` query parameter
+    (closes #37); passwords containing ``&``, ``=``, ``#``, ``+`` etc. now
+    round-trip correctly instead of corrupting the query string.
     """
-    decorator = "?" if "?" not in url else "&"
-    url_to_launch = f"{url}{decorator}pwd={password}" if password else url
+    parsed = urlsplit(url)
+    if not is_trusted_zoom_host(parsed.hostname or ""):
+        raise UntrustedHostError(
+            f"Refusing to launch URL with untrusted host: {parsed.hostname or url!r}"
+        )
+
+    if password:
+        # quote(safe="") percent-encodes every character outside the
+        # unreserved set (a-zA-Z0-9_.-~), which is exactly what we want
+        # for a query-string value.
+        decorator = "?" if "?" not in url else "&"
+        url_to_launch = f"{url}{decorator}pwd={quote(password, safe='')}"
+    else:
+        url_to_launch = url
+
     cmd = shutil.which("open") or shutil.which("xdg-open")
     if cmd is None:
         raise LauncherUnavailableError(

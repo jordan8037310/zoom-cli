@@ -117,13 +117,23 @@ def test_launch_zoommtg_url_does_not_shell_interpret_metacharacters(
 ) -> None:
     """Regression test for #4: shell metacharacters in user data must not be
     interpreted as shell syntax. Argv-list ``subprocess.run`` guarantees this.
+
+    As of #37, passwords are URL-encoded into the ``pwd=`` query parameter,
+    so the shell-injection security guarantee is satisfied two ways: argv-
+    list (no shell parsing) and percent-encoding (no URL injection). This
+    test pins both — the URL-decoded form of the ``pwd=`` parameter must
+    match the original password byte-for-byte.
     """
+    from urllib.parse import parse_qs, urlsplit
+
     utils_mod.launch_zoommtg("123", metacharacter_password)
     assert len(captured_launches) == 1
     argv = captured_launches[0]
     assert argv[0] == "open"
-    # The metacharacters must arrive verbatim in argv[1] — never expanded.
-    assert metacharacter_password in argv[1]
+    # Decoded password round-trips: percent-decoding the pwd= query value
+    # must yield exactly the original (no shell expansion either way).
+    pwd_values = parse_qs(urlsplit(argv[1]).query).get("pwd", [])
+    assert pwd_values == [metacharacter_password]
 
 
 def test_console_color_constants_are_strings() -> None:
@@ -302,3 +312,102 @@ def test_write_to_meeting_file_round_trips_unicode(tmp_zoom_cli_home: Path) -> N
     utils_mod.write_to_meeting_file(payload)
     on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
     assert on_disk == payload
+
+
+# ---- #44: delimiter-heavy password coverage ------------------------------
+
+
+@pytest.mark.parametrize(
+    "delimiter_password",
+    [
+        "a&b",
+        "a=b",
+        "a#b",
+        "a+b",
+        "a?b",
+        "hello world",
+        "100%done",
+        "a&b=c#d+e?f g%h",  # everything at once
+        "with'quote",
+        'with"quote',
+        "back\\slash",
+    ],
+)
+def test_launch_zoommtg_url_round_trips_delimiter_password(
+    captured_launches: list[list[str]], delimiter_password: str
+) -> None:
+    """Closes #44, verifies #37 fix: passwords containing URL delimiters
+    round-trip cleanly through the zoommtg:// query string. Before the
+    URL-encoding fix, a `pwd=a&b=c#d` would be parsed as multiple query
+    parameters and a fragment by Zoom's client."""
+    from urllib.parse import parse_qs, urlsplit
+
+    utils_mod.launch_zoommtg("123", delimiter_password)
+    assert len(captured_launches) == 1
+    argv = captured_launches[0]
+    assert argv[0] == "open"
+    pwd_values = parse_qs(urlsplit(argv[1]).query).get("pwd", [])
+    assert pwd_values == [delimiter_password], (
+        f"pwd round-trip failed for {delimiter_password!r}: got {pwd_values!r} from URL {argv[1]!r}"
+    )
+
+
+# ---- #38: trusted Zoom domain allowlist ----------------------------------
+
+
+@pytest.mark.parametrize(
+    "host,trusted",
+    [
+        ("zoom.us", True),
+        ("us02web.zoom.us", True),
+        ("example.zoom.us", True),
+        ("zoomgov.com", True),
+        ("us02.zoomgov.com", True),
+        ("ZOOM.US", True),  # case-insensitive
+        ("", False),
+        ("evil.example.com", False),
+        ("my-zoom.us-domain.com", False),  # substring, not subdomain
+        ("zoom.us.evil.com", False),  # zoom.us is not a suffix domain
+        ("notzoom.us", False),
+    ],
+)
+def test_is_trusted_zoom_host(host: str, trusted: bool) -> None:
+    assert utils_mod.is_trusted_zoom_host(host) is trusted
+
+
+@pytest.mark.parametrize(
+    "url,trusted",
+    [
+        ("https://zoom.us/j/123", True),
+        ("https://us02web.zoom.us/j/123?pwd=abc", True),
+        ("zoommtg://zoom.us/join?confno=1", True),
+        ("zoom.us/j/123", True),  # no scheme
+        ("us02web.zoom.us/j/123", True),
+        ("https://zoomgov.com/j/123", True),
+        ("https://evil.example/zoom.us/j/1", False),
+        ("https://my-zoom.us-domain.com/j/1", False),
+        ("not-a-url", False),
+        ("", False),
+    ],
+)
+def test_looks_like_zoom_url(url: str, trusted: bool) -> None:
+    assert utils_mod.looks_like_zoom_url(url) is trusted
+
+
+def test_launch_zoommtg_url_rejects_untrusted_host(
+    captured_launches: list[list[str]],
+) -> None:
+    """Closes #38: an untrusted host must never reach the launcher."""
+    with pytest.raises(utils_mod.UntrustedHostError):
+        utils_mod.launch_zoommtg_url("zoommtg://evil.example/j/1?pwd=p")
+    assert captured_launches == []
+
+
+def test_launch_zoommtg_url_rejects_substring_lookalike(
+    captured_launches: list[list[str]],
+) -> None:
+    """The old ``\"zoom.us\" in url_or_name`` substring check would have
+    accepted this; the new allowlist-based check rejects it."""
+    with pytest.raises(utils_mod.UntrustedHostError):
+        utils_mod.launch_zoommtg_url("zoommtg://my-zoom.us-domain.com/j/1")
+    assert captured_launches == []

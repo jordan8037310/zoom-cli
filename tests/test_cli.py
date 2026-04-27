@@ -577,3 +577,58 @@ def test_edit_with_empty_store_short_circuits(
     result = runner.invoke(main, ["edit"])
     assert result.exit_code == 0
     assert "No saved meetings" in result.output
+
+
+# ---- launch command (#38 untrusted-host refusal) -------------------------
+
+
+def test_launch_refuses_url_with_untrusted_scheme_host(
+    runner: CliRunner, captured_launches: list[list[str]]
+) -> None:
+    """Closes #38: an explicit scheme + non-Zoom host must be refused at the
+    CLI layer with a clear error and exit code != 0. Never reaches the
+    launcher subprocess."""
+    result = runner.invoke(main, ["https://evil.example/zoom.us/j/123"])
+    assert result.exit_code != 0
+    assert "untrusted host" in result.output.lower()
+    assert captured_launches == []
+
+
+def test_launch_refuses_substring_lookalike(
+    runner: CliRunner, captured_launches: list[list[str]]
+) -> None:
+    """``my-zoom.us-domain.com`` contains the literal substring ``zoom.us``
+    but is not a Zoom subdomain. Old substring-based routing accepted it."""
+    result = runner.invoke(main, ["https://my-zoom.us-domain.com/j/123"])
+    assert result.exit_code != 0
+    assert "untrusted host" in result.output.lower()
+    assert captured_launches == []
+
+
+def test_launch_accepts_zoom_subdomain(
+    runner: CliRunner, captured_launches: list[list[str]]
+) -> None:
+    result = runner.invoke(main, ["https://us02web.zoom.us/j/123"])
+    assert result.exit_code == 0, result.output
+    assert len(captured_launches) == 1
+    assert captured_launches[0][1].startswith("zoommtg://us02web.zoom.us/")
+
+
+def test_launch_accepts_bare_zoom_url_no_scheme(
+    runner: CliRunner, captured_launches: list[list[str]]
+) -> None:
+    result = runner.invoke(main, ["zoom.us/j/123"])
+    assert result.exit_code == 0, result.output
+    assert len(captured_launches) == 1
+
+
+def test_launch_routes_non_url_to_saved_meeting_lookup(
+    runner: CliRunner, write_meetings, captured_launches: list[list[str]]
+) -> None:
+    """A bare argument that doesn't parse as a Zoom URL routes to the
+    saved-meeting branch (the existing behaviour for `zoom <name>`)."""
+    write_meetings({"daily": {"id": "999"}})
+    result = runner.invoke(main, ["daily"])
+    assert result.exit_code == 0, result.output
+    assert len(captured_launches) == 1
+    assert "confno=999" in captured_launches[0][1]
