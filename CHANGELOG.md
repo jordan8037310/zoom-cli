@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 > Bootstrap PR: [#25](https://github.com/jordan8037310/zoom-cli/pull/25) — closes #4, #7, #8 and partially addresses #9, #10.
+> Codex review follow-ups (this branch): closes #34, #35, #36, #37, #38, #39, #40, #41, #42, #43, #44, #45, #46, #47 (all 14 findings from Codex's PR #32 review).
+
+### Security (Codex review follow-ups)
+- **#34 (High)** — `zoom auth s2s set` no longer accepts `--client-secret` as a CLI flag. Values in argv landed in shell history and were visible via `ps`/proc to other users on the host. New contract: `ZOOM_CLIENT_SECRET` env var or masked `questionary.password()` prompt only. `--account-id` and `--client-id` still accept flags (public-ish identifiers) and pick up `ZOOM_ACCOUNT_ID` / `ZOOM_CLIENT_ID` env vars.
+- **#35 (High)** — `save_s2s_credentials` is now best-effort transactional: snapshot existing values, write new ones, restore the snapshot on any partial failure. Closes the "mixed credential set" failure mode where a partial keyring write left the user authenticating with one new field and two old ones, silently.
+- **#37 (Medium)** — Meeting passwords are URL-encoded when appended to the `zoommtg://` query string. Passwords containing `&`, `=`, `#`, `+` etc. now round-trip cleanly instead of corrupting the URL semantics.
+- **#38 (Medium)** — Trusted-host allowlist (`zoom.us`, `zoomgov.com`, and proper subdomains thereof) replaces the substring `"zoom.us" in url_or_name` check. Deceptive inputs like `https://evil.example/zoom.us/j/1` and `https://my-zoom.us-domain.com/j/1` are now rejected at the launch layer.
+- **#40 (Low)** — `~/.zoom-cli/` is created with `0o700` and `meetings.json` with `0o600`. Existing files/dirs are tightened on touch if owned by the current user and group/world-readable. Initial file creation uses `O_CREAT|O_EXCL` to avoid the umask TOCTOU window.
+
+### Fixed (Codex review follow-ups)
+- **#39 (Medium)** — `meetings.json` mutations now hold an exclusive POSIX file lock (`fcntl.flock` against `meetings.json.lock`). Prevents lost updates when concurrent `zoom save`/`edit`/`rm` invocations interleave. New `meeting_file_transaction()` context manager wraps read + lock + persist.
+- **#41 (Medium)** — `load_s2s_credentials()` no longer flattens `NoKeyringError`/`InitError` to `None`. The CLI now distinguishes "user has not configured S2S yet" (exit 1) from "this machine has no keyring backend at all" (exit 2). `has_s2s_credentials()` keeps the silent-False semantics for the probe-style `zoom auth status` command.
+- **#42 (Medium)** — Both `fetch_access_token` and `ApiClient.request` wrap the success-path `response.json()` so a non-JSON 2xx body (corporate proxy returning HTML, captive portal) surfaces as `ZoomAuthError`/`ZoomApiError` instead of leaking raw `ValueError` to callers. Includes the response's `content-type` in the error message for triage.
+- **#43 (Medium)** — New `_translate_keyring_errors` decorator in `__main__.py` applied to `s2s set`, `s2s test`, `logout`, `users me`. Splits errors three ways: `NoKeyringError`/`InitError` → exit 2 with "backend not available", other `KeyringError` → exit 3 with "may be locked", anything else propagates. No more raw Python tracebacks on a locked Keychain.
+- **#47 (High, partial)** — `AccessToken.is_expired` now treats a token as expired when within `EXPIRY_SKEW_SECONDS` (60s) of its absolute expiry, preventing the race where a request lands after Zoom rotated the token. `ApiClient.request` catches a 401 once, force-refreshes the cached token, and retries the request — covers token rotation / scope-change cases. A second 401 propagates as `ZoomApiError` so we never loop. 429 / Retry-After / token-bucket / pagination remain deferred to issue #16.
+
+### Changed (Codex review follow-ups)
+- **#36 (Medium)** — `zoom_cli/api/users.py` now exposes `get_user(client, user_id="me")` as the durable boundary for the Users API. `get_me(client)` is kept as a thin alias for backward compatibility with PR #31's CLI code. The path segment is percent-encoded so caller-supplied IDs cannot inject path/query metacharacters.
+
+### Tests added (Codex review follow-ups)
+- **#44 (Medium)** — Parametrized round-trip test over delimiter-heavy passwords (`&`, `=`, `#`, `+`, `?`, space, `%`, quote, backslash). Pin for the #37 fix.
+- **#45 (Medium)** — Parametrized test (`fail_on_call=1,2,3`) for the #35 rollback path; asserts the prior credential set survives a partial keyring failure. Plus a no-prior-state variant that asserts the rollback deletes what was written.
+- **#46 (Low)** — Tests for HTML, empty, and garbage 2xx bodies on both OAuth and Users endpoints. Pin for the #42 fix.
+- Lock-serialization test for #39 (two threads, one delayed; both meetings present after).
+- Permissions tests for #40 (fresh dir is 0o700, fresh file is 0o600, existing permissive permissions are tightened on touch).
+- 401 retry tests for #47 (single retry on 401, no retry on 403, no infinite loop on persistent 401).
+
+
 
 ### Added
 - Modern `pyproject.toml` packaging (PEP 621) with `dev` and `build` extras.
