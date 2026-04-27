@@ -18,17 +18,22 @@ API shape:
     #14 flagged that hardcoding the implicit "me" principal would make
     later target-user commands awkward).
 
-Out of scope here, deferred to issue #14:
-- ``GET /users`` listing with pagination.
+    :func:`list_users` paginates across the ``GET /users`` endpoint via
+    :func:`zoom_cli.api.pagination.paginate` (closes #16 first consumer).
+
+Still deferred to issue #14:
+- ``zoom users create`` / ``delete`` / ``settings`` CLI commands.
 - ``--json`` flag for raw output.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 from urllib.parse import quote
 
 from zoom_cli.api.client import ApiClient
+from zoom_cli.api.pagination import DEFAULT_PAGE_SIZE, paginate
 
 
 def get_user(client: ApiClient, user_id: str = "me") -> dict[str, Any]:
@@ -51,3 +56,34 @@ def get_me(client: ApiClient) -> dict[str, Any]:
     that imported it from PR #31. Prefer :func:`get_user` in new code.
     """
     return get_user(client, "me")
+
+
+def list_users(
+    client: ApiClient,
+    *,
+    status: str = "active",
+    page_size: int = DEFAULT_PAGE_SIZE,
+) -> Iterator[dict[str, Any]]:
+    """``GET /users`` — yield every user record across all pages.
+
+    Args:
+        client: Authenticated :class:`ApiClient`.
+        status: Account user status filter (``active``, ``inactive``,
+            ``pending``). Default matches Zoom's UI default.
+        page_size: Items per page; see :data:`DEFAULT_PAGE_SIZE`. The
+            ``/users`` endpoint accepts up to 300.
+
+    Yields:
+        One user dict per record. Lazy — additional pages are fetched
+        only as the caller iterates.
+
+    Required scopes: ``user:read:list_users:admin`` (or finer-grained
+    equivalent for the listed account).
+    """
+    return paginate(
+        client,
+        "/users",
+        item_key="users",
+        params={"status": status},
+        page_size=page_size,
+    )
