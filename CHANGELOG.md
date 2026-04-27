@@ -10,7 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Bootstrap PR: [#25](https://github.com/jordan8037310/zoom-cli/pull/25) — closes #4, #7, #8 and partially addresses #9, #10.
 > Codex review follow-ups (PR #32): closes #34, #35, #36, #37, #38, #39, #40, #41, #42, #43, #44, #45, #46, #47.
 > CC security setup (PR #33): adds `.claude/settings.json`, `SECURITY.md`, `LOCAL-SECURITY.md`, `TASKS.md`, and three FACET developer skills.
-> Rate-limit + pagination (this branch): closes #16 (partial — per-tier token bucket deferred). 429/Retry-After backoff with jitter; `paginate()` generator helper; `users.list_users()` as the first paginated endpoint.
+> Rate-limit + pagination (PR #48): closes #16 (partial — per-tier token bucket tracked at #49). 429/Retry-After backoff with jitter; `paginate()` generator helper; `users.list_users()` as the first paginated endpoint.
+> Users CLI surface (this branch): closes #14 (read-only piece). New `zoom users list` and `zoom users get <user-id>` commands.
+
+### Added (issue #14, read-only)
+- New `zoom users list` CLI command — paginates `GET /users` via the helper from PR #48. Tab-separated output (`user_id\temail\ttype\tstatus`) with a header line; pipes cleanly into `cut`/`awk`/`column`. `--status active|inactive|pending` (default `active`) and `--page-size` (1–300, default 300) flags.
+- New `zoom users get <user-id>` CLI command — `GET /users/<user-id>`. Accepts a Zoom user ID or email address. Same field-per-line output format as `zoom users me`.
+- Refactored `__main__.py`: extracted `_print_user_profile`, `_load_creds_or_exit`, and `_exit_on_api_error` helpers so the three users commands share their boilerplate. The original `zoom users me` behaviour is unchanged.
+
+### Deferred (issue #14 follow-up)
+- `zoom users create` / `delete` / `settings` (write commands). Each needs separate confirmation-flow design (e.g. `--yes` for delete, scope warnings for create) so they're better as a separate PR.
+
+
 
 ### Added (issue #16)
 - New `zoom_cli/api/pagination.py` with `paginate(client, path, *, item_key, params, page_size)` generator. Walks Zoom's `next_page_token` cursor, yielding each item across all pages. Lazy — pages are fetched on demand.

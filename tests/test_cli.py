@@ -741,3 +741,154 @@ def test_s2s_set_translates_keyring_save_error(
     assert "may be locked" in result.output.lower()
     # Restore for fixture teardown.
     monkeypatch.setattr(keyring, "set_password", real_set)
+
+
+# ---- #14: zoom users get / list CLI ------------------------------------
+
+
+def test_users_get_bails_when_no_credentials(runner: CliRunner) -> None:
+    result = runner.invoke(main, ["users", "get", "u-123"])
+    assert result.exit_code == 1
+    assert "No Server-to-Server" in result.output
+
+
+def test_users_get_prints_well_known_fields(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import zoom_cli.__main__ as main_mod
+    from zoom_cli import auth
+
+    auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
+
+    captured = {}
+
+    def fake_get_user(_client, user_id):
+        captured["user_id"] = user_id
+        return {
+            "id": "u-target",
+            "email": "bob@example.com",
+            "display_name": "Bob Example",
+            "type": 1,
+            "status": "active",
+        }
+
+    monkeypatch.setattr(main_mod.users, "get_user", fake_get_user)
+    monkeypatch.setattr(
+        main_mod.oauth,
+        "fetch_access_token",
+        lambda *_a, **_k: _fake_access_token(),
+    )
+
+    result = runner.invoke(main, ["users", "get", "u-target"])
+    assert result.exit_code == 0, result.output
+    assert captured["user_id"] == "u-target"
+    assert "bob@example.com" in result.output
+    assert "Bob Example" in result.output
+
+
+def test_users_get_passes_email_through_unmodified(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Zoom accepts an email as `user_id` for `GET /users/<email>`."""
+    import zoom_cli.__main__ as main_mod
+    from zoom_cli import auth
+
+    auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
+
+    captured = {}
+
+    def fake_get_user(_client, user_id):
+        captured["user_id"] = user_id
+        return {"id": "u-1", "email": "alice@example.com"}
+
+    monkeypatch.setattr(main_mod.users, "get_user", fake_get_user)
+    monkeypatch.setattr(
+        main_mod.oauth, "fetch_access_token", lambda *_a, **_k: _fake_access_token()
+    )
+
+    result = runner.invoke(main, ["users", "get", "alice@example.com"])
+    assert result.exit_code == 0, result.output
+    assert captured["user_id"] == "alice@example.com"
+
+
+def test_users_list_bails_when_no_credentials(runner: CliRunner) -> None:
+    result = runner.invoke(main, ["users", "list"])
+    assert result.exit_code == 1
+    assert "No Server-to-Server" in result.output
+
+
+def test_users_list_prints_tab_separated_with_header(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import zoom_cli.__main__ as main_mod
+    from zoom_cli import auth
+
+    auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
+
+    captured = {}
+
+    def fake_list_users(_client, *, status, page_size):
+        captured["status"] = status
+        captured["page_size"] = page_size
+        return iter(
+            [
+                {"id": "u-1", "email": "alice@example.com", "type": 1, "status": "active"},
+                {"id": "u-2", "email": "bob@example.com", "type": 2, "status": "active"},
+            ]
+        )
+
+    monkeypatch.setattr(main_mod.users, "list_users", fake_list_users)
+    monkeypatch.setattr(
+        main_mod.oauth, "fetch_access_token", lambda *_a, **_k: _fake_access_token()
+    )
+
+    result = runner.invoke(main, ["users", "list"])
+    assert result.exit_code == 0, result.output
+
+    lines = result.output.strip().split("\n")
+    assert lines[0] == "user_id\temail\ttype\tstatus"
+    assert lines[1] == "u-1\talice@example.com\t1\tactive"
+    assert lines[2] == "u-2\tbob@example.com\t2\tactive"
+
+    # Default filter values flow through.
+    assert captured["status"] == "active"
+    assert captured["page_size"] == 300
+
+
+def test_users_list_forwards_status_and_page_size(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import zoom_cli.__main__ as main_mod
+    from zoom_cli import auth
+
+    auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
+
+    captured = {}
+
+    def fake_list_users(_client, *, status, page_size):
+        captured["status"] = status
+        captured["page_size"] = page_size
+        return iter([])
+
+    monkeypatch.setattr(main_mod.users, "list_users", fake_list_users)
+    monkeypatch.setattr(
+        main_mod.oauth, "fetch_access_token", lambda *_a, **_k: _fake_access_token()
+    )
+
+    result = runner.invoke(main, ["users", "list", "--status", "pending", "--page-size", "50"])
+    assert result.exit_code == 0, result.output
+    assert captured["status"] == "pending"
+    assert captured["page_size"] == 50
+
+
+def test_users_list_rejects_invalid_status(runner: CliRunner) -> None:
+    """click.Choice should reject anything outside active/inactive/pending."""
+    result = runner.invoke(main, ["users", "list", "--status", "garbage"])
+    assert result.exit_code != 0
+    assert "garbage" in result.output.lower() or "invalid" in result.output.lower()
+
+
+def test_users_list_rejects_oversize_page(runner: CliRunner) -> None:
+    """click.IntRange should cap at 300 (Zoom's per-endpoint maximum)."""
+    result = runner.invoke(main, ["users", "list", "--page-size", "5000"])
+    assert result.exit_code != 0
