@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 > Bootstrap PR: [#25](https://github.com/jordan8037310/zoom-cli/pull/25) — closes #4, #7, #8 and partially addresses #9, #10.
-> Codex review follow-ups (this branch): closes #34, #35, #36, #37, #38, #39, #40, #41, #42, #43, #44, #45, #46, #47 (all 14 findings from Codex's PR #32 review).
+> Codex review follow-ups (PR #32): closes #34, #35, #36, #37, #38, #39, #40, #41, #42, #43, #44, #45, #46, #47 (all 14 findings from Codex's PR #32 review).
+> CC security setup (this branch): adds `.claude/settings.json`, `SECURITY.md`, `LOCAL-SECURITY.md`, `TASKS.md`, and three FACET developer skills.
 
 ### Security (Codex review follow-ups)
 - **#34 (High)** — `zoom auth s2s set` no longer accepts `--client-secret` as a CLI flag. Values in argv landed in shell history and were visible via `ps`/proc to other users on the host. New contract: `ZOOM_CLIENT_SECRET` env var or masked `questionary.password()` prompt only. `--account-id` and `--client-id` still accept flags (public-ish identifiers) and pick up `ZOOM_ACCOUNT_ID` / `ZOOM_CLIENT_ID` env vars.
@@ -16,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **#37 (Medium)** — Meeting passwords are URL-encoded when appended to the `zoommtg://` query string. Passwords containing `&`, `=`, `#`, `+` etc. now round-trip cleanly instead of corrupting the URL semantics.
 - **#38 (Medium)** — Trusted-host allowlist (`zoom.us`, `zoomgov.com`, and proper subdomains thereof) replaces the substring `"zoom.us" in url_or_name` check. Deceptive inputs like `https://evil.example/zoom.us/j/1` and `https://my-zoom.us-domain.com/j/1` are now rejected at the launch layer.
 - **#40 (Low)** — `~/.zoom-cli/` is created with `0o700` and `meetings.json` with `0o600`. Existing files/dirs are tightened on touch if owned by the current user and group/world-readable. Initial file creation uses `O_CREAT|O_EXCL` to avoid the umask TOCTOU window.
+
+### Security (CC onboarding setup)
+- **Claude Code permission rules** (`.claude/settings.json`) — three-tier deny / allow / default-ask model. Denies `zoom auth s2s set/test`, `zoom users me` and all other endpoint subcommands, keyring access against `zoom-cli` / `zoom-cli-auth` services, direct `curl`/`wget` against `api.zoom.us`, and `~/.zoom-cli/**` reads — so AI assistants cannot consume real Zoom credentials during development. Allow-list covers read-only git/lint/test/CI inspection commands; everything else defaults to ask.
+- **`SECURITY.md`** — project threat model, data classification, attack surface, mitigations, and AI development guardrails.
+- **`LOCAL-SECURITY.md`** — risk register for installed skills, plugins, and MCP servers (currently no project-scoped MCPs).
+- **`TASKS.md`** — onboarding follow-ups (security tooling evaluation, schema versioning, disclosure channel).
+- **`.gitignore`** — fixed `.claude/` blanket-ignore so shared `.claude/settings.json` and `.claude/skills/` are tracked while `.claude/settings.local.json` and `.claude/CLAUDE.local.md` remain local-only. Added defense-in-depth `.env` ignores.
+- **FACET developer skills** copied into `.claude/skills/`: `env-safe.md`, `mcp-security.md`, `codebase-introspection.md`.
 
 ### Fixed (Codex review follow-ups)
 - **#39 (Medium)** — `meetings.json` mutations now hold an exclusive POSIX file lock (`fcntl.flock` against `meetings.json.lock`). Prevents lost updates when concurrent `zoom save`/`edit`/`rm` invocations interleave. New `meeting_file_transaction()` context manager wraps read + lock + persist.
@@ -34,8 +43,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Lock-serialization test for #39 (two threads, one delayed; both meetings present after).
 - Permissions tests for #40 (fresh dir is 0o700, fresh file is 0o600, existing permissive permissions are tightened on touch).
 - 401 retry tests for #47 (single retry on 401, no retry on 403, no infinite loop on persistent 401).
-
-
 
 ### Added
 - Modern `pyproject.toml` packaging (PEP 621) with `dev` and `build` extras.

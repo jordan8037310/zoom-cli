@@ -94,8 +94,33 @@ ENV/
 .mypy_cache/
 .pytest_cache/
 
-# Local Claude state
-.claude/
+# === Added by FACET CC Onboarding ===
+
+# OS
+.DS_Store
+
+# Environment secrets (defense in depth — project does not currently use .env)
+.env
+.env.*
+!.env.example
+!.env.dist
+!.env.sample
+!.env.template
+
+# Claude Code local-only state (shared config — settings.json, skills/ — IS committed)
+.claude/settings.local.json
+.claude/CLAUDE.local.md
+.claude/.local/
+.claude/cache/
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# Keep empty directories
+!.gitkeep
 
 # Coverage outputs
 coverage.xml
