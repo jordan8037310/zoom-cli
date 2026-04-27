@@ -74,5 +74,30 @@ When opening a PR, run automated review using:
 
 ## Security guardrails
 
-- The current launcher uses `os.system(...)` with a `shell=True` semantic. Treat any URL/ID/password coming from an interactive prompt or saved file as untrusted; future PRs will switch to `subprocess.Popen` with a list-form `argv`.
-- `meetings.json` stores meeting passwords in plaintext at `~/.zoom-cli/meetings.json`. This is a known issue tracked in GitHub Issues; do not introduce new plaintext-secret storage paths without a tracking issue.
+For the full threat model and data-classification table, see `SECURITY.md`. For local dev tooling risk (skills, plugins, MCPs), see `LOCAL-SECURITY.md`. For enforced AI-assistant permissions, see `.claude/settings.json`.
+
+### Source-code rules
+
+- The launcher historically used `os.system(...)` with `shell=True` semantics; PR #25 review feedback switched it to argv-list `subprocess.run`. Continue treating any URL/ID/password coming from an interactive prompt or saved file as untrusted.
+- Meeting passwords now live in the OS keyring under service `zoom-cli` (PR #28 / closes #5). Legacy plaintext entries in `~/.zoom-cli/meetings.json` are auto-migrated on first `_edit` touch. Do not introduce new plaintext-secret storage paths without a tracking issue.
+- Server-to-Server OAuth credentials live under service `zoom-cli-auth`. Bearer tokens are in-memory only (`AccessToken` dataclass with `is_expired`); never persist them.
+
+### AI-assistant rules (no-Zoom-API-keys)
+
+When working on this project with Claude Code, Codex, or any AI assistant, the following are **denied** by `.claude/settings.json` and must not be worked around:
+
+- `zoom auth s2s set` / `zoom auth s2s test` / `zoom auth login` — would prompt for or use real Zoom credentials.
+- `zoom users me` and any other endpoint subcommand (`meetings`, `recordings`, `phone`, `chat`, `reports`, `dashboard`, `webhook`) — would make live Zoom API calls.
+- `keyring get/set zoom-cli*` and `security find-generic-password ... zoom-cli*` — would read or write the developer's Keychain entries.
+- `curl/wget/http/httpie` against `api.zoom.us` or `zoom.us/oauth` — would bypass the deny rules above.
+- Reads of `~/.zoom-cli/**` — may contain real meeting passwords (legacy plaintext).
+- `.env` reads — defense in depth; project does not currently use `.env`.
+
+All testing of OAuth and API code uses `httpx.MockTransport` and an autouse `_InMemoryKeyring` backend (see `tests/conftest.py`). If you need to exercise a new endpoint, add a `MockTransport` test — never call live Zoom.
+
+### Installed FACET skills
+
+`.claude/skills/` contains:
+- `env-safe.md` — safe `.env` inspection patterns (never expose secret values).
+- `mcp-security.md` — threat model + checklist for any future MCP install.
+- `codebase-introspection.md` — static-analysis guidance.
