@@ -411,3 +411,97 @@ def test_launch_zoommtg_url_rejects_substring_lookalike(
     with pytest.raises(utils_mod.UntrustedHostError):
         utils_mod.launch_zoommtg_url("zoommtg://my-zoom.us-domain.com/j/1")
     assert captured_launches == []
+
+
+# ---- #40: storage permissions hardening ---------------------------------
+
+
+def test_ensure_storage_creates_dir_with_0o700(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Closes #40: a fresh ~/.zoom-cli is owner-only."""
+    home = tmp_path / "fresh-zoom-cli"
+    save_file = home / "meetings.json"
+    monkeypatch.setattr(utils_mod, "ZOOM_CLI_DIR", str(home))
+    monkeypatch.setattr(utils_mod, "SAVE_FILE_PATH", str(save_file))
+
+    utils_mod._ensure_storage()
+
+    assert home.is_dir()
+    # Mask down to the permission bits we care about.
+    assert (home.stat().st_mode & 0o777) == 0o700
+
+
+def test_ensure_storage_creates_file_with_0o600(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "fresh-zoom-cli"
+    save_file = home / "meetings.json"
+    monkeypatch.setattr(utils_mod, "ZOOM_CLI_DIR", str(home))
+    monkeypatch.setattr(utils_mod, "SAVE_FILE_PATH", str(save_file))
+
+    utils_mod._ensure_storage()
+
+    assert save_file.exists()
+    assert (save_file.stat().st_mode & 0o777) == 0o600
+
+
+def test_ensure_storage_tightens_existing_permissive_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Existing ~/.zoom-cli created under a permissive umask gets tightened
+    on the next touch."""
+    home = tmp_path / "loose-zoom-cli"
+    home.mkdir(mode=0o755)  # group/world-readable — needs tightening
+    save_file = home / "meetings.json"
+    save_file.write_text("{}")
+    os.chmod(save_file, 0o644)
+
+    monkeypatch.setattr(utils_mod, "ZOOM_CLI_DIR", str(home))
+    monkeypatch.setattr(utils_mod, "SAVE_FILE_PATH", str(save_file))
+
+    utils_mod._ensure_storage()
+
+    assert (home.stat().st_mode & 0o777) == 0o700
+    assert (save_file.stat().st_mode & 0o777) == 0o600
+
+
+# ---- #39: meeting_file_transaction concurrency --------------------------
+
+
+def test_meeting_file_transaction_persists_changes(tmp_zoom_cli_home: Path) -> None:
+    with utils_mod.meeting_file_transaction() as contents:
+        contents["new"] = {"id": "1"}
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    assert on_disk == {"new": {"id": "1"}}
+
+
+def test_meeting_file_transaction_lock_serializes_concurrent_writes(
+    tmp_zoom_cli_home: Path,
+) -> None:
+    """Closes #39: two threads that each save a different meeting must both
+    end up persisted. Without the lock, the second writer's snapshot would
+    overwrite the first."""
+    import threading
+    import time
+
+    barrier = threading.Barrier(2)
+
+    def add_meeting(name: str, delay: float) -> None:
+        barrier.wait()  # both threads enter the transaction at the "same time"
+        with utils_mod.meeting_file_transaction() as contents:
+            # Simulate a slow read-modify-write window. With a real lock,
+            # the second thread blocks at the `with` until the first exits.
+            time.sleep(delay)
+            contents[name] = {"id": name}
+
+    t1 = threading.Thread(target=add_meeting, args=("alpha", 0.05))
+    t2 = threading.Thread(target=add_meeting, args=("beta", 0.0))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    assert "alpha" in on_disk
+    assert "beta" in on_disk

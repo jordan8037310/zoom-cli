@@ -35,16 +35,113 @@ class ConsoleColor:
     END = "\033[0m"
 
 
+#: Directory mode for ``~/.zoom-cli`` — owner only (closes #40).
+_DIR_MODE = 0o700
+#: File mode for ``meetings.json`` and the lock file — owner only.
+_FILE_MODE = 0o600
+
+
+def _is_owned_by_current_user(stat_result: os.stat_result) -> bool:
+    """POSIX: True if the file's owner uid matches the current process uid.
+
+    On Windows ``os.getuid`` doesn't exist; skip the ownership check since
+    Windows ACLs work differently and ``chmod`` is largely a no-op anyway.
+    """
+    try:
+        return stat_result.st_uid == os.getuid()
+    except AttributeError:
+        return True
+
+
 def _ensure_storage() -> None:
     """Create the storage dir and empty meetings file on first use.
 
     Done lazily so tests can monkeypatch the paths before any storage call.
+    The directory is created with ``0o700`` and the meetings file with
+    ``0o600`` (closes #40). Existing dirs/files are tightened on touch if
+    they're owned by us and currently group/world-readable — older
+    installations created them under the ambient umask.
     """
     if not os.path.isdir(ZOOM_CLI_DIR):
-        os.makedirs(ZOOM_CLI_DIR)
+        os.makedirs(ZOOM_CLI_DIR, mode=_DIR_MODE)
+    else:
+        with contextlib.suppress(OSError):
+            stat_result = os.stat(ZOOM_CLI_DIR)
+            if _is_owned_by_current_user(stat_result) and stat_result.st_mode & 0o077:
+                os.chmod(ZOOM_CLI_DIR, _DIR_MODE)
+
     if not os.path.exists(SAVE_FILE_PATH):
-        with open(SAVE_FILE_PATH, "w") as file:
+        # O_CREAT|O_EXCL is the standard atomic-create idiom; combined with
+        # mode=_FILE_MODE this avoids a TOCTOU window where the file
+        # briefly exists with the umask permissions.
+        fd = os.open(SAVE_FILE_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _FILE_MODE)
+        with os.fdopen(fd, "w") as file:
             file.write("{}")
+    else:
+        with contextlib.suppress(OSError):
+            stat_result = os.stat(SAVE_FILE_PATH)
+            if _is_owned_by_current_user(stat_result) and stat_result.st_mode & 0o077:
+                os.chmod(SAVE_FILE_PATH, _FILE_MODE)
+
+
+@contextlib.contextmanager
+def _meeting_file_lock():
+    """Exclusive POSIX file lock around read-modify-write on ``meetings.json``.
+
+    Closes #39: prevents lost updates when two ``zoom save``/``edit``/``rm``
+    invocations interleave. Atomic ``os.replace`` only protects file
+    integrity; without a lock both processes can read the same snapshot
+    and the second write silently overwrites the first.
+
+    Locks a sibling ``meetings.json.lock`` file rather than
+    ``meetings.json`` itself, because we replace the meetings file
+    atomically on every write — its inode doesn't survive, so a lock on
+    it doesn't either. The lock file is created with ``_FILE_MODE``.
+
+    Best-effort on non-POSIX (Windows): ``fcntl`` isn't available, so the
+    lock is a no-op. Single-developer Windows use is fine; concurrent
+    Windows automation should add ``msvcrt.locking`` (out of scope here).
+    """
+    _ensure_storage()
+    try:
+        import fcntl
+    except ImportError:
+        yield
+        return
+
+    lock_path = SAVE_FILE_PATH + ".lock"
+    # Open with O_CREAT but no exclusive — the lock file is shared across
+    # invocations. mode applies on creation only.
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, _FILE_MODE)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+@contextlib.contextmanager
+def meeting_file_transaction():
+    """Acquire the meeting-file lock, read the current contents, persist on exit.
+
+    Usage::
+
+        with meeting_file_transaction() as contents:
+            contents[name] = {...}
+
+    Combined with the lock from :func:`_meeting_file_lock`, this guarantees
+    that interleaved ``zoom save``/``edit``/``rm`` invocations cannot lose
+    each other's updates (closes #39). The atomic write semantics from
+    :func:`write_to_meeting_file` still apply, so a crash mid-write cannot
+    corrupt the file either.
+    """
+    with _meeting_file_lock():
+        contents = get_meeting_file_contents()
+        yield contents
+        write_to_meeting_file(contents)
 
 
 def dict_to_json_string(data) -> str:

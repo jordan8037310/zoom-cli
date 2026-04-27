@@ -9,9 +9,9 @@ from zoom_cli.utils import (
     get_meeting_file_contents,
     launch_zoommtg,
     launch_zoommtg_url,
+    meeting_file_transaction,
     parse_meeting_url,
     strip_url_scheme,
-    write_to_meeting_file,
 )
 
 
@@ -112,9 +112,11 @@ def _save_url(name, url, password):
     else:
         secrets.delete_password(name)
 
-    contents = get_meeting_file_contents()
-    contents[name] = {"url": url}
-    write_to_meeting_file(contents)
+    # `meeting_file_transaction` takes the exclusive lock, yields the
+    # current contents, and persists on exit (closes #39 — concurrent
+    # invocations no longer overwrite each other's updates).
+    with meeting_file_transaction() as contents:
+        contents[name] = {"url": url}
 
 
 def _save_id_password(name, id, password):
@@ -123,59 +125,56 @@ def _save_id_password(name, id, password):
     else:
         secrets.delete_password(name)
 
-    contents = get_meeting_file_contents()
-    contents[name] = {"id": id}
-    write_to_meeting_file(contents)
+    with meeting_file_transaction() as contents:
+        contents[name] = {"id": id}
 
 
 def _edit(name, url, id, password):
-    contents = get_meeting_file_contents()
-    new_dict: dict[str, str] = {}
     legacy_plaintext_password: str | None = None
 
-    if url:
-        new_dict["url"] = url
-    if id:
-        new_dict["id"] = id
+    with meeting_file_transaction() as contents:
+        new_dict: dict[str, str] = {}
+        if url:
+            new_dict["url"] = url
+        if id:
+            new_dict["id"] = id
 
-    # For each existing non-secret field, re-prompt with the new value (if a
-    # flag was passed) or the old value as the default. The user can clear a
-    # field by submitting an empty string; only Ctrl-C aborts. Passwords are
-    # NOT re-prompted here — they live in the keyring and are managed via
-    # the explicit ``--password`` flag.
-    for key, val in contents[name].items():
-        if key == "password":
-            # Legacy plaintext password from a pre-keyring entry. Capture it
-            # so we can migrate it into the keyring below — never just drop
-            # it (all three reviewers on #28 flagged the silent loss).
-            legacy_plaintext_password = val
-            continue
-        answer = questionary.text(key, default=new_dict.get(key, val)).ask()
-        if answer is None:
-            raise click.Abort
-        new_dict[key] = answer
+        # For each existing non-secret field, re-prompt with the new value (if a
+        # flag was passed) or the old value as the default. The user can clear a
+        # field by submitting an empty string; only Ctrl-C aborts. Passwords are
+        # NOT re-prompted here — they live in the keyring and are managed via
+        # the explicit ``--password`` flag.
+        for key, val in contents[name].items():
+            if key == "password":
+                # Legacy plaintext password from a pre-keyring entry. Capture it
+                # so we can migrate it into the keyring below — never just drop
+                # it (all three reviewers on #28 flagged the silent loss).
+                legacy_plaintext_password = val
+                continue
+            answer = questionary.text(key, default=new_dict.get(key, val)).ask()
+            if answer is None:
+                raise click.Abort
+            new_dict[key] = answer
 
-    # Password handling — keyring is the source of truth.
-    # Order matters: write keyring before rewriting JSON so a keyring-side
-    # failure leaves the user's prior state intact.
-    if password:
-        # Explicit --password flag wins.
-        secrets.set_password(name, password)
-    elif legacy_plaintext_password is not None and secrets.get_password(name) is None:
-        # Migrate legacy plaintext into the keyring on first edit. Only do
-        # this if there's no existing keyring entry — never overwrite a
-        # newer keyring value with stale legacy plaintext.
-        secrets.set_password(name, legacy_plaintext_password)
+        # Password handling — keyring is the source of truth.
+        # Order matters: write keyring before rewriting JSON so a keyring-side
+        # failure leaves the user's prior state intact.
+        if password:
+            # Explicit --password flag wins.
+            secrets.set_password(name, password)
+        elif legacy_plaintext_password is not None and secrets.get_password(name) is None:
+            # Migrate legacy plaintext into the keyring on first edit. Only do
+            # this if there's no existing keyring entry — never overwrite a
+            # newer keyring value with stale legacy plaintext.
+            secrets.set_password(name, legacy_plaintext_password)
 
-    del contents[name]
-    contents[name] = new_dict
-    write_to_meeting_file(contents)
+        del contents[name]
+        contents[name] = new_dict
 
 
 def _remove(name):
-    contents = get_meeting_file_contents()
-    del contents[name]
-    write_to_meeting_file(contents)
+    with meeting_file_transaction() as contents:
+        del contents[name]
     secrets.delete_password(name)
 
 
