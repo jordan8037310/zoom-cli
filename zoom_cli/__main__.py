@@ -1,7 +1,9 @@
+import functools
 import os
 
 import click
 import httpx
+import keyring.errors
 import questionary
 from click_default_group import DefaultGroup
 
@@ -33,6 +35,48 @@ def _ask_or_abort(question):
     if answer is None:
         raise click.Abort
     return answer
+
+
+# ---- error translation -----------------------------------------------------
+#
+# Closes #41 / #43: keyring failures should surface as actionable CLI
+# errors, not Python tracebacks. We split the error space three ways so the
+# user knows what to do:
+#
+#   - NoKeyringError / InitError → no backend at all (exit 2).
+#     Action: install/configure a keyring backend.
+#   - Other KeyringError → backend present but refused (exit 3).
+#     Action: unlock the keychain.
+#   - Anything else → propagates normally.
+#
+# Decorator order in command stacks: place ``@_translate_keyring_errors``
+# closest to ``def`` so it wraps the bare function. Click options decorate
+# the wrapper next, then ``@s2s.command`` registers the wrapped command.
+
+
+def _translate_keyring_errors(func):
+    """Map keyring exceptions to friendly CLI exits with distinct codes."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except (keyring.errors.NoKeyringError, keyring.errors.InitError) as exc:
+            click.echo(
+                f"OS keyring backend not available: {exc}\n"
+                "Install or configure a keyring backend before retrying.",
+                err=True,
+            )
+            raise click.exceptions.Exit(code=2) from exc
+        except keyring.errors.KeyringError as exc:
+            click.echo(
+                f"OS keyring error (the backend may be locked): {exc}\n"
+                "Unlock your keychain and retry.",
+                err=True,
+            )
+            raise click.exceptions.Exit(code=3) from exc
+
+    return wrapper
 
 
 @click.group(cls=DefaultGroup, default="launch", default_if_no_args=True)
@@ -185,6 +229,7 @@ def s2s():
     envvar="ZOOM_CLIENT_ID",
     help="Server-to-Server OAuth Client ID",
 )
+@_translate_keyring_errors
 def s2s_set(account_id, client_id):
     if not account_id:
         account_id = _ask_or_abort(questionary.text("Account ID:"))
@@ -215,6 +260,7 @@ def s2s_set(account_id, client_id):
     "test",
     help="Verify saved Server-to-Server OAuth credentials by exchanging them for a token.",
 )
+@_translate_keyring_errors
 def s2s_test():
     creds = auth.load_s2s_credentials()
     if creds is None:
@@ -252,6 +298,14 @@ def _now():
 
 @auth_cmd.command(help="Show which authentication mode is configured.")
 def status():
+    """``status`` deliberately does NOT use ``@_translate_keyring_errors``.
+
+    ``has_s2s_credentials`` swallows backend-missing errors itself and
+    reports "not configured", which is the right UX for a probe-style
+    command — you don't want a 'check status' to crash the script. Users
+    debugging a missing backend should run ``zoom auth s2s test`` (which
+    surfaces the backend error).
+    """
     if auth.has_s2s_credentials():
         click.echo("Server-to-Server OAuth: configured")
     else:
@@ -260,6 +314,7 @@ def status():
 
 
 @auth_cmd.command(help="Clear all stored API authentication credentials.")
+@_translate_keyring_errors
 def logout():
     auth.clear_s2s_credentials()
     click.echo("Cleared Server-to-Server OAuth credentials.")
@@ -274,6 +329,7 @@ def users_cmd():
 
 
 @users_cmd.command("me", help="Print the authenticated user's profile (GET /users/me).")
+@_translate_keyring_errors
 def users_me():
     creds = auth.load_s2s_credentials()
     if creds is None:

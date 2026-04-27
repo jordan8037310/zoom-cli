@@ -55,12 +55,31 @@ def test_has_s2s_credentials_true_when_all_present() -> None:
     assert auth.has_s2s_credentials() is True
 
 
-def test_load_returns_none_on_no_keyring_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_propagates_no_keyring_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Closes #41: a missing keyring backend is no longer silently flattened
+    to ``None`` — that conflated "user has not run `zoom auth s2s set`" with
+    a genuine environmental failure. Now the caller (the CLI) translates."""
+
     def boom(*_args, **_kwargs):
         raise keyring.errors.NoKeyringError("no backend")
 
     monkeypatch.setattr(keyring, "get_password", boom)
-    assert auth.load_s2s_credentials() is None
+    with pytest.raises(keyring.errors.NoKeyringError):
+        auth.load_s2s_credentials()
+
+
+def test_has_s2s_credentials_swallows_no_keyring_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``has_s2s_credentials`` is the probe-style helper used by ``zoom auth
+    status``. It deliberately swallows backend-missing errors so a "check
+    status" call doesn't blow up on a misconfigured machine."""
+
+    def boom(*_args, **_kwargs):
+        raise keyring.errors.NoKeyringError("no backend")
+
+    monkeypatch.setattr(keyring, "get_password", boom)
+    assert auth.has_s2s_credentials() is False
 
 
 def test_load_does_not_swallow_locked_keyring(monkeypatch: pytest.MonkeyPatch) -> None:

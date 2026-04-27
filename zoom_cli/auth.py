@@ -91,17 +91,17 @@ def load_s2s_credentials() -> S2SCredentials | None:
     state is treated the same as no state. Callers that want to know
     *which* fields are missing should look at each key directly.
 
-    Catches only the genuine "no backend" errors (matches the policy in
-    ``zoom_cli.secrets``) — locked or misbehaving backends propagate so
-    the user can see and resolve them rather than silently being treated
-    as logged-out.
+    Behavior change in #41: ``NoKeyringError`` and ``InitError`` now
+    propagate rather than being silently flattened to ``None``. The two
+    states ("user has not configured S2S yet" vs "this machine has no
+    keyring backend at all") need different remediation paths and the
+    CLI surfaces them with different exit codes. Locked or otherwise
+    misbehaving backends already propagated; this just makes the
+    backend-missing case behave the same way for consistency.
     """
-    try:
-        account_id = keyring.get_password(SERVICE_NAME, _ACCOUNT_ID_KEY)
-        client_id = keyring.get_password(SERVICE_NAME, _CLIENT_ID_KEY)
-        client_secret = keyring.get_password(SERVICE_NAME, _CLIENT_SECRET_KEY)
-    except (keyring.errors.NoKeyringError, keyring.errors.InitError):
-        return None
+    account_id = keyring.get_password(SERVICE_NAME, _ACCOUNT_ID_KEY)
+    client_id = keyring.get_password(SERVICE_NAME, _CLIENT_ID_KEY)
+    client_secret = keyring.get_password(SERVICE_NAME, _CLIENT_SECRET_KEY)
 
     if not (account_id and client_id and client_secret):
         return None
@@ -121,5 +121,14 @@ def clear_s2s_credentials() -> None:
 
 
 def has_s2s_credentials() -> bool:
-    """Cheap "is the user logged in via S2S?" check, no return of secrets."""
-    return load_s2s_credentials() is not None
+    """Cheap "is the user logged in via S2S?" check, no return of secrets.
+
+    Returns ``False`` if the backend is unavailable (rather than raising)
+    so the CLI ``status`` command can give a friendlier message; callers
+    that need to distinguish "no backend" from "no creds" should use
+    :func:`load_s2s_credentials` directly.
+    """
+    try:
+        return load_s2s_credentials() is not None
+    except (keyring.errors.NoKeyringError, keyring.errors.InitError):
+        return False

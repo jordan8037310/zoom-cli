@@ -632,3 +632,112 @@ def test_launch_routes_non_url_to_saved_meeting_lookup(
     assert result.exit_code == 0, result.output
     assert len(captured_launches) == 1
     assert "confno=999" in captured_launches[0][1]
+
+
+# ---- #41 / #43: keyring error translation at CLI boundary ----------------
+
+
+def _force_keyring_error(monkeypatch: pytest.MonkeyPatch, exc: Exception) -> None:
+    """Patch every keyring entry point used by the CLI to raise ``exc``."""
+    import keyring
+
+    def boom(*_args, **_kwargs):
+        raise exc
+
+    monkeypatch.setattr(keyring, "get_password", boom)
+    monkeypatch.setattr(keyring, "set_password", boom)
+    monkeypatch.setattr(keyring, "delete_password", boom)
+
+
+def test_s2s_test_translates_no_keyring_to_distinct_exit_code(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Closes #41: 'no backend' must give exit 2 with a backend-specific
+    message, distinct from the 'not configured' exit 1."""
+    import keyring.errors
+
+    _force_keyring_error(monkeypatch, keyring.errors.NoKeyringError("no backend"))
+    result = runner.invoke(main, ["auth", "s2s", "test"])
+    assert result.exit_code == 2
+    assert "keyring backend not available" in result.output.lower()
+
+
+def test_s2s_test_translates_locked_keyring_to_friendly_error(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Closes #43: a generic KeyringError (e.g. locked Keychain) gives a
+    friendly message and exit code 3 — not a Python traceback."""
+    import keyring.errors
+
+    _force_keyring_error(monkeypatch, keyring.errors.KeyringError("locked"))
+    result = runner.invoke(main, ["auth", "s2s", "test"])
+    assert result.exit_code == 3
+    assert "may be locked" in result.output.lower()
+    # No traceback noise.
+    assert "Traceback" not in result.output
+
+
+def test_users_me_translates_keyring_errors(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`zoom users me` must not surface raw KeyringError on a locked
+    keychain — it goes through the same translation as auth commands."""
+    import keyring.errors
+
+    _force_keyring_error(monkeypatch, keyring.errors.KeyringError("locked"))
+    result = runner.invoke(main, ["users", "me"])
+    assert result.exit_code == 3
+    assert "Traceback" not in result.output
+
+
+def test_logout_translates_keyring_errors(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import keyring.errors
+
+    _force_keyring_error(monkeypatch, keyring.errors.NoKeyringError("no backend"))
+    result = runner.invoke(main, ["auth", "logout"])
+    assert result.exit_code == 2
+    assert "keyring backend not available" in result.output.lower()
+
+
+def test_status_swallows_no_backend_and_reports_not_configured(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``zoom auth status`` is a probe-style command — it should not exit
+    non-zero just because the backend is missing. The friendly 'not
+    configured' message is enough; users debugging a real backend issue
+    use ``zoom auth s2s test``."""
+    import keyring.errors
+
+    _force_keyring_error(monkeypatch, keyring.errors.NoKeyringError("no backend"))
+    result = runner.invoke(main, ["auth", "status"])
+    assert result.exit_code == 0
+    assert "not configured" in result.output
+
+
+def test_s2s_set_translates_keyring_save_error(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the keyring write itself fails (locked backend), the user gets a
+    friendly error, not a raw exception trace."""
+    import keyring
+    import keyring.errors
+
+    # `save` reads existing values first (snapshot) — those reads succeed
+    # on the in-memory backend. The first set_password fails.
+    real_set = keyring.set_password
+
+    def boom(service, username, password):
+        raise keyring.errors.KeyringError("locked")
+
+    monkeypatch.setattr(keyring, "set_password", boom)
+    result = runner.invoke(
+        main,
+        ["auth", "s2s", "set", "--account-id", "a", "--client-id", "b"],
+        env={"ZOOM_CLIENT_SECRET": "c"},
+    )
+    assert result.exit_code == 3
+    assert "may be locked" in result.output.lower()
+    # Restore for fixture teardown.
+    monkeypatch.setattr(keyring, "set_password", real_set)
