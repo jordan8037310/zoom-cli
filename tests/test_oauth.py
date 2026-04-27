@@ -165,3 +165,56 @@ def test_token_url_is_zoom_oauth_endpoint() -> None:
     """Pin the URL — different from the API base (api.zoom.us). A future
     rename would silently break every existing user."""
     assert oauth.TOKEN_URL == "https://zoom.us/oauth/token"
+
+
+# ---- #46 / #42: malformed-JSON 2xx success bodies ------------------------
+
+
+def test_fetch_access_token_raises_zoom_auth_error_on_html_2xx() -> None:
+    """Closes #46 / verifies #42 fix: a 2xx body that isn't JSON (corporate
+    proxy returning HTML, captive portal) used to leak raw ValueError."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text="<html><body>Captive portal login required</body></html>",
+            headers={"Content-Type": "text/html"},
+        )
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as http,
+        pytest.raises(oauth.ZoomAuthError) as excinfo,
+    ):
+        oauth.fetch_access_token(
+            S2SCredentials(account_id="a", client_id="b", client_secret="c"),
+            client=http,
+        )
+    assert "non-JSON body" in str(excinfo.value)
+
+
+def test_fetch_access_token_raises_zoom_auth_error_on_empty_2xx() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"")
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as http,
+        pytest.raises(oauth.ZoomAuthError),
+    ):
+        oauth.fetch_access_token(
+            S2SCredentials(account_id="a", client_id="b", client_secret="c"),
+            client=http,
+        )
+
+
+def test_fetch_access_token_raises_zoom_auth_error_on_garbage_2xx() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="not json at all")
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as http,
+        pytest.raises(oauth.ZoomAuthError),
+    ):
+        oauth.fetch_access_token(
+            S2SCredentials(account_id="a", client_id="b", client_secret="c"),
+            client=http,
+        )

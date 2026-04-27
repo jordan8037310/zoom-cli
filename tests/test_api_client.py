@@ -155,3 +155,60 @@ def test_api_base_url_is_pinned() -> None:
     """A future rename of the API base would silently break every endpoint
     helper. Pin it here so the test fails loudly."""
     assert client_mod.API_BASE_URL == "https://api.zoom.us/v2"
+
+
+# ---- #46 / #42: malformed-JSON 2xx bodies on REST endpoints --------------
+
+
+def test_request_raises_zoom_api_error_on_html_2xx() -> None:
+    """Closes #46 / verifies #42 fix: a non-JSON 2xx body should surface as
+    ZoomApiError, not raw ValueError."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/oauth/token"):
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": "tok",
+                    "token_type": "bearer",
+                    "expires_in": 3600,
+                    "scope": "user:read:user",
+                },
+            )
+        return httpx.Response(
+            200,
+            text="<html>nope</html>",
+            headers={"Content-Type": "text/html"},
+        )
+
+    transport = httpx.MockTransport(handler)
+    with (
+        httpx.Client(transport=transport) as http,
+        pytest.raises(client_mod.ZoomApiError) as excinfo,
+    ):
+        api = client_mod.ApiClient(_creds(), http_client=http)
+        api.request("GET", "/users/me")
+    assert "non-JSON body" in str(excinfo.value)
+
+
+def test_request_raises_zoom_api_error_on_garbage_2xx() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/oauth/token"):
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": "tok",
+                    "token_type": "bearer",
+                    "expires_in": 3600,
+                    "scope": "",
+                },
+            )
+        return httpx.Response(200, text="not json")
+
+    transport = httpx.MockTransport(handler)
+    with (
+        httpx.Client(transport=transport) as http,
+        pytest.raises(client_mod.ZoomApiError),
+    ):
+        api = client_mod.ApiClient(_creds(), http_client=http)
+        api.request("GET", "/users/me")

@@ -138,7 +138,18 @@ class ApiClient:
             )
         if not response.content:
             return {}
-        return response.json()
+        # Closes #42: a 2xx body that isn't JSON used to leak raw ValueError.
+        # Translate to ZoomApiError so callers always see the same typed
+        # exception envelope regardless of which side of the proxy chain
+        # corrupted the response.
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise ZoomApiError(
+                "Zoom API returned 2xx with non-JSON body "
+                f"(content-type={response.headers.get('content-type', 'unknown')})",
+                status_code=response.status_code,
+            ) from exc
 
     def get(self, path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """Convenience wrapper for ``GET``."""

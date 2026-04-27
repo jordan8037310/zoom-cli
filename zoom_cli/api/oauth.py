@@ -132,7 +132,20 @@ def fetch_access_token(
             error_code=payload.get("error"),
         )
 
-    payload = response.json()
+    # Closes #42: a 2xx body that isn't JSON (corporate proxy returning HTML,
+    # captive portal, intermediate cache returning empty) used to leak raw
+    # ValueError. Translate to ZoomAuthError so callers see the same typed
+    # exception they'd see for an auth refusal — different status, same
+    # error class, easier to handle uniformly.
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise ZoomAuthError(
+            "Token endpoint returned 2xx with non-JSON body "
+            f"(content-type={response.headers.get('content-type', 'unknown')})",
+            status_code=response.status_code,
+        ) from exc
+
     token_value = payload.get("access_token")
     if not token_value:
         raise ZoomAuthError(
