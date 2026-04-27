@@ -328,33 +328,113 @@ def users_cmd():
     """Group for ``zoom users ...``."""
 
 
-@users_cmd.command("me", help="Print the authenticated user's profile (GET /users/me).")
-@_translate_keyring_errors
-def users_me():
+# Fields printed by `zoom users me` and `zoom users get`. The full Zoom
+# user payload has many dozen fields; users who want all of them can pipe
+# the underlying call through `jq` once we add `--json` (separate issue).
+_USER_PROFILE_FIELDS = ("display_name", "email", "id", "account_id", "type", "status")
+
+
+def _print_user_profile(profile: dict) -> None:
+    """Print the well-known subset of a Zoom user payload, one field per line."""
+    for field in _USER_PROFILE_FIELDS:
+        if field in profile:
+            click.echo(f"{field}: {profile[field]}")
+
+
+def _load_creds_or_exit():
+    """Load S2S creds, exit cleanly with a friendly message if not configured."""
     creds = auth.load_s2s_credentials()
     if creds is None:
         click.echo("No Server-to-Server OAuth credentials saved. Run `zoom auth s2s set` first.")
         raise click.exceptions.Exit(code=1)
+    return creds
 
+
+def _exit_on_api_error(exc: Exception) -> None:
+    """Print a typed message for Zoom API / network errors, then exit 1.
+
+    Centralises the three-way error handling that every API CLI command
+    needs: ``ZoomAuthError`` (HTTP from token endpoint), ``ZoomApiError``
+    (HTTP from the API endpoint), ``httpx.HTTPError`` (network / TLS /
+    timeout). Callers should ``raise`` the result so type checkers and
+    readers see the control flow.
+    """
+    if isinstance(exc, oauth.ZoomAuthError):
+        click.echo(f"Authentication failed (HTTP {exc.status_code}): {exc}")
+    elif isinstance(exc, ZoomApiError):
+        click.echo(f"Zoom API error (HTTP {exc.status_code}): {exc}")
+    elif isinstance(exc, httpx.HTTPError):
+        click.echo(f"Could not reach Zoom API: {exc}")
+    else:
+        # Should never happen — caller filters before delegating.
+        raise exc
+    raise click.exceptions.Exit(code=1) from exc
+
+
+@users_cmd.command("me", help="Print the authenticated user's profile (GET /users/me).")
+@_translate_keyring_errors
+def users_me():
+    creds = _load_creds_or_exit()
     try:
         with ApiClient(creds) as client:
             profile = users.get_me(client)
-    except oauth.ZoomAuthError as exc:
-        click.echo(f"Authentication failed (HTTP {exc.status_code}): {exc}")
-        raise click.exceptions.Exit(code=1) from exc
-    except ZoomApiError as exc:
-        click.echo(f"Zoom API error (HTTP {exc.status_code}): {exc}")
-        raise click.exceptions.Exit(code=1) from exc
-    except httpx.HTTPError as exc:
-        click.echo(f"Could not reach Zoom API: {exc}")
-        raise click.exceptions.Exit(code=1) from exc
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    _print_user_profile(profile)
 
-    # Print a few well-known fields. The full payload is many dozen
-    # fields; users who want all of them can pipe the underlying call
-    # through `jq` once we add `--json` (out of scope for this PR).
-    for field in ("display_name", "email", "id", "account_id", "type", "status"):
-        if field in profile:
-            click.echo(f"{field}: {profile[field]}")
+
+@users_cmd.command("get", help="Print a specific user's profile (GET /users/<user-id>).")
+@click.argument("user_id")
+@_translate_keyring_errors
+def users_get(user_id):
+    """``user_id`` is either a Zoom user ID or an email address. Closes #14
+    (read-only piece) — write commands (create/delete/settings) are a
+    follow-up that needs separate confirmation-flow design."""
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            profile = users.get_user(client, user_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    _print_user_profile(profile)
+
+
+@users_cmd.command("list", help="List users in the account (paginates GET /users).")
+@click.option(
+    "--status",
+    type=click.Choice(["active", "inactive", "pending"]),
+    default="active",
+    show_default=True,
+    help="Filter by Zoom user status.",
+)
+@click.option(
+    "--page-size",
+    type=click.IntRange(1, 300),
+    default=300,
+    show_default=True,
+    help="Items per page request (Zoom caps `/users` at 300).",
+)
+@_translate_keyring_errors
+def users_list(status, page_size):
+    """Output is tab-separated (id\\temail\\ttype\\tstatus) so it pipes into
+    ``cut``/``awk``/``column``. Pagination is handled transparently;
+    multi-page accounts may take a few seconds.
+
+    Closes #14 (read-only piece) — uses the ``paginate()`` helper from
+    PR #48 / issue #16."""
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            click.echo("user_id\temail\ttype\tstatus")
+            for user in users.list_users(client, status=status, page_size=page_size):
+                click.echo(
+                    f"{user.get('id', '')}\t"
+                    f"{user.get('email', '')}\t"
+                    f"{user.get('type', '')}\t"
+                    f"{user.get('status', '')}"
+                )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
 
 
 if __name__ == "__main__":
