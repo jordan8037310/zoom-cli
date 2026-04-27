@@ -1,3 +1,5 @@
+import os
+
 import click
 import httpx
 import questionary
@@ -160,15 +162,33 @@ def s2s():
     """Group for ``zoom auth s2s ...``."""
 
 
-@s2s.command("set", help="Save Server-to-Server OAuth credentials to the OS keyring.")
-@click.option("--account-id", default="", help="Zoom Account ID")
-@click.option("--client-id", default="", help="Server-to-Server OAuth Client ID")
-@click.option("--client-secret", default="", help="Server-to-Server OAuth Client Secret")
-def s2s_set(account_id, client_id, client_secret):
+@s2s.command(
+    "set",
+    help=(
+        "Save Server-to-Server OAuth credentials to the OS keyring. "
+        "The client secret is read from the ZOOM_CLIENT_SECRET env var or, "
+        "if unset, prompted interactively (masked). It is intentionally NOT "
+        "accepted as a command-line flag (closes #34)."
+    ),
+)
+@click.option("--account-id", default="", envvar="ZOOM_ACCOUNT_ID", help="Zoom Account ID")
+@click.option(
+    "--client-id",
+    default="",
+    envvar="ZOOM_CLIENT_ID",
+    help="Server-to-Server OAuth Client ID",
+)
+def s2s_set(account_id, client_id):
     if not account_id:
         account_id = _ask_or_abort(questionary.text("Account ID:"))
     if not client_id:
         client_id = _ask_or_abort(questionary.text("Client ID:"))
+
+    # Client secret is intentionally NOT a CLI flag — values in argv land in
+    # shell history and are visible via `ps`/proc to other users on the host
+    # for the lifetime of the command. Accept via masked prompt or the
+    # ZOOM_CLIENT_SECRET env var only. Closes #34.
+    client_secret = os.environ.get("ZOOM_CLIENT_SECRET", "")
     if not client_secret:
         # questionary.password() masks the input on screen. The default
         # text() prompt would echo the secret to the terminal.

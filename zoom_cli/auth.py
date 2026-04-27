@@ -49,16 +49,39 @@ class S2SCredentials:
     client_secret: str
 
 
+_ALL_KEYS = (_ACCOUNT_ID_KEY, _CLIENT_ID_KEY, _CLIENT_SECRET_KEY)
+
+
 def save_s2s_credentials(creds: S2SCredentials) -> None:
     """Persist all three S2S fields to the OS keyring under ``zoom-cli-auth``.
 
-    Atomic semantics are best-effort: if the second or third write fails
-    we leave whatever's already there. The caller can re-run ``zoom auth
-    s2s set`` to retry. This matches how ``zoom save`` works for meetings.
+    Best-effort transactional: snapshot the existing values first, then write
+    the three new ones in order. If any write raises, restore the snapshot
+    so the user is left with the prior credential set rather than a hybrid
+    of new + old fields. ``load_s2s_credentials`` would otherwise return a
+    full-looking tuple composed of mismatched values, leading the user to
+    authenticate with the wrong account/client combination silently.
+    Closes #35.
     """
-    keyring.set_password(SERVICE_NAME, _ACCOUNT_ID_KEY, creds.account_id)
-    keyring.set_password(SERVICE_NAME, _CLIENT_ID_KEY, creds.client_id)
-    keyring.set_password(SERVICE_NAME, _CLIENT_SECRET_KEY, creds.client_secret)
+    snapshot = {key: keyring.get_password(SERVICE_NAME, key) for key in _ALL_KEYS}
+    written: list[str] = []
+    try:
+        for key, value in (
+            (_ACCOUNT_ID_KEY, creds.account_id),
+            (_CLIENT_ID_KEY, creds.client_id),
+            (_CLIENT_SECRET_KEY, creds.client_secret),
+        ):
+            keyring.set_password(SERVICE_NAME, key, value)
+            written.append(key)
+    except Exception:
+        for key in written:
+            previous = snapshot[key]
+            with contextlib.suppress(Exception):
+                if previous is None:
+                    keyring.delete_password(SERVICE_NAME, key)
+                else:
+                    keyring.set_password(SERVICE_NAME, key, previous)
+        raise
 
 
 def load_s2s_credentials() -> S2SCredentials | None:
@@ -92,7 +115,7 @@ def load_s2s_credentials() -> S2SCredentials | None:
 
 def clear_s2s_credentials() -> None:
     """Remove all three S2S keyring entries. Safe to call when none exist."""
-    for key in (_ACCOUNT_ID_KEY, _CLIENT_ID_KEY, _CLIENT_SECRET_KEY):
+    for key in _ALL_KEYS:
         with contextlib.suppress(keyring.errors.PasswordDeleteError):
             keyring.delete_password(SERVICE_NAME, key)
 

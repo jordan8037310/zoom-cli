@@ -167,9 +167,27 @@ def test_auth_status_when_not_configured(runner: CliRunner) -> None:
     assert "not configured" in result.output
 
 
-def test_auth_s2s_set_with_flags_persists_to_keyring(runner: CliRunner) -> None:
+def test_auth_s2s_set_with_env_secret_persists_to_keyring(runner: CliRunner) -> None:
     from zoom_cli import auth
 
+    result = runner.invoke(
+        main,
+        ["auth", "s2s", "set", "--account-id", "acc-1", "--client-id", "cid-2"],
+        env={"ZOOM_CLIENT_SECRET": "csecret-3"},
+    )
+    assert result.exit_code == 0, result.output
+    assert "saved" in result.output.lower()
+
+    loaded = auth.load_s2s_credentials()
+    assert loaded is not None
+    assert loaded.account_id == "acc-1"
+    assert loaded.client_id == "cid-2"
+    assert loaded.client_secret == "csecret-3"
+
+
+def test_auth_s2s_set_rejects_client_secret_flag(runner: CliRunner) -> None:
+    """Closes #34: --client-secret must NOT exist as a CLI flag, since values
+    in argv land in shell history and are visible via process inspection."""
     result = runner.invoke(
         main,
         [
@@ -181,17 +199,36 @@ def test_auth_s2s_set_with_flags_persists_to_keyring(runner: CliRunner) -> None:
             "--client-id",
             "cid-2",
             "--client-secret",
-            "csecret-3",
+            "should-be-rejected",
         ],
     )
+    assert result.exit_code != 0
+    # Click prints "No such option" or similar on unknown flags.
+    assert "no such option" in result.output.lower() or "unrecognized" in result.output.lower()
+
+
+def test_auth_s2s_set_reads_account_and_client_id_from_env(runner: CliRunner) -> None:
+    """All three identifiers can come from env vars (only client_secret is
+    forbidden from the flag path; account_id and client_id are public-ish
+    identifiers but env support keeps scripted use ergonomic)."""
+    from zoom_cli import auth
+
+    result = runner.invoke(
+        main,
+        ["auth", "s2s", "set"],
+        env={
+            "ZOOM_ACCOUNT_ID": "env-acc",
+            "ZOOM_CLIENT_ID": "env-cid",
+            "ZOOM_CLIENT_SECRET": "env-secret",
+        },
+    )
     assert result.exit_code == 0, result.output
-    assert "saved" in result.output.lower()
 
     loaded = auth.load_s2s_credentials()
     assert loaded is not None
-    assert loaded.account_id == "acc-1"
-    assert loaded.client_id == "cid-2"
-    assert loaded.client_secret == "csecret-3"
+    assert loaded.account_id == "env-acc"
+    assert loaded.client_id == "env-cid"
+    assert loaded.client_secret == "env-secret"
 
 
 def test_auth_status_when_configured(runner: CliRunner) -> None:
@@ -222,17 +259,8 @@ def test_auth_s2s_set_does_not_echo_secret_in_output(runner: CliRunner) -> None:
     secret = "very-secret-do-not-leak-12345"
     result = runner.invoke(
         main,
-        [
-            "auth",
-            "s2s",
-            "set",
-            "--account-id",
-            "a",
-            "--client-id",
-            "b",
-            "--client-secret",
-            secret,
-        ],
+        ["auth", "s2s", "set", "--account-id", "a", "--client-id", "b"],
+        env={"ZOOM_CLIENT_SECRET": secret},
     )
     assert result.exit_code == 0, result.output
     assert secret not in result.output
