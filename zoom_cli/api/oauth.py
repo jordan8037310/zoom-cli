@@ -41,6 +41,13 @@ TOKEN_URL = "https://zoom.us/oauth/token"  # noqa: S105 - public endpoint URL, n
 #: legitimately spike up to ~10s.
 DEFAULT_TIMEOUT_SECONDS = 15.0
 
+#: Safety margin on token expiry checks (closes #47, partial). Without a
+#: skew, a token issued at t=0 is considered valid until t=3600 — but if we
+#: send a request at t=3599.5 the server may have already revoked it. 60s
+#: matches the typical clock-skew tolerance and is short enough that we
+#: still get nearly the full 1-hour token lifetime.
+EXPIRY_SKEW_SECONDS = 60
+
 
 @dataclass(frozen=True)
 class AccessToken:
@@ -59,7 +66,11 @@ class AccessToken:
 
     @property
     def is_expired(self) -> bool:
-        return datetime.now(timezone.utc) >= self.expires_at
+        """True if the token has expired or is within
+        :data:`EXPIRY_SKEW_SECONDS` of expiry. Closes #47 (partial)."""
+        return datetime.now(timezone.utc) >= self.expires_at - timedelta(
+            seconds=EXPIRY_SKEW_SECONDS
+        )
 
 
 class ZoomAuthError(RuntimeError):

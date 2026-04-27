@@ -6,7 +6,12 @@ that adds:
 - automatic bearer-token injection on every request,
 - an in-memory access-token cache (Zoom tokens live for 1 hour and there's
   no value in persisting them — they're cheaper to re-fetch than to keep
-  in a keyring),
+  in a keyring); cache uses a 60s expiry skew (see
+  :data:`oauth.EXPIRY_SKEW_SECONDS`) so we don't send requests with
+  about-to-expire tokens,
+- a single-shot 401 retry that force-refreshes the token and re-issues the
+  request once (closes #47, partial) — covers the "Zoom revoked the token
+  before our clock said it expired" race,
 - a :class:`ZoomApiError` raised on non-2xx responses with the parsed
   Zoom error envelope (``{"code": ..., "message": ...}``).
 
@@ -16,8 +21,6 @@ Out of scope here, deliberately:
   shape of the client is stable enough that adding a token-bucket
   decorator later will be additive.
 - Pagination helpers — folded into issue #16 alongside the limiter.
-- 401-driven force-refresh — happy path is enough for the first round
-  of API endpoints.
 """
 
 from __future__ import annotations
@@ -91,19 +94,43 @@ class ApiClient:
 
     # ---- token lifecycle ---------------------------------------------
 
-    def _access_token(self) -> oauth.AccessToken:
+    def _access_token(self, *, force_refresh: bool = False) -> oauth.AccessToken:
         """Return a usable access token, fetching a new one if needed.
 
-        We re-use the cached token while it's still valid. Since Zoom
-        tokens are 1-hour bearers, almost every CLI invocation gets a
-        single token. Long-running callers (a future ``zoom watch``)
-        will hit the refresh path naturally.
+        We re-use the cached token while it's still valid (with a 60s
+        expiry skew — see :data:`oauth.EXPIRY_SKEW_SECONDS`). Long-running
+        callers (a future ``zoom watch``) will hit the refresh path
+        naturally as the token approaches expiry.
+
+        ``force_refresh=True`` is used by the 401 retry path: even if the
+        cached token *thinks* it's still valid, the server has told us
+        otherwise, so we drop the cache and re-fetch.
         """
+        if force_refresh:
+            self._cached_token = None
         if self._cached_token is None or self._cached_token.is_expired:
             self._cached_token = oauth.fetch_access_token(self._credentials, client=self._http)
         return self._cached_token
 
     # ---- HTTP --------------------------------------------------------
+
+    def _send(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, Any] | None,
+        json: dict[str, Any] | None,
+        force_refresh: bool = False,
+    ) -> httpx.Response:
+        token = self._access_token(force_refresh=force_refresh)
+        return self._http.request(
+            method,
+            url,
+            params=params,
+            json=json,
+            headers={"Authorization": f"Bearer {token.value}"},
+        )
 
     def request(
         self,
@@ -115,17 +142,17 @@ class ApiClient:
     ) -> dict[str, Any]:
         """Issue an authenticated request and return the parsed JSON body.
 
+        On a 401, force-refresh the token and retry once (closes #47,
+        partial) — covers the case where Zoom revoked the token before
+        our local clock said it expired (rotation, scope change). A second
+        401 propagates as :class:`ZoomApiError` so we never loop.
+
         Raises :class:`ZoomApiError` for any non-2xx response.
         """
-        token = self._access_token()
         url = f"{API_BASE_URL}{path}" if path.startswith("/") else f"{API_BASE_URL}/{path}"
-        response = self._http.request(
-            method,
-            url,
-            params=params,
-            json=json,
-            headers={"Authorization": f"Bearer {token.value}"},
-        )
+        response = self._send(method, url, params=params, json=json)
+        if response.status_code == 401:
+            response = self._send(method, url, params=params, json=json, force_refresh=True)
         if response.status_code >= 400:
             try:
                 payload = response.json()

@@ -212,3 +212,111 @@ def test_request_raises_zoom_api_error_on_garbage_2xx() -> None:
     ):
         api = client_mod.ApiClient(_creds(), http_client=http)
         api.request("GET", "/users/me")
+
+
+# ---- #47: 401 single-shot retry with token refresh -----------------------
+
+
+def test_request_retries_once_on_401_with_force_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Closes #47 (partial): on a 401 the client must drop the cached
+    token, fetch a fresh one, and retry the request once. The second
+    attempt's success means the user never sees the transient 401."""
+
+    fetch_calls = {"n": 0}
+
+    def fake_fetch(*_args, **_kwargs) -> oauth.AccessToken:
+        fetch_calls["n"] += 1
+        return oauth.AccessToken(
+            value=f"tok-{fetch_calls['n']}",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            scopes=(),
+        )
+
+    monkeypatch.setattr(oauth, "fetch_access_token", fake_fetch)
+
+    request_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_count["n"] += 1
+        if request_count["n"] == 1:
+            # First request: server says token is invalid (revoked, scope
+            # change, etc.). Local clock thought it was still good.
+            return httpx.Response(401, json={"code": 124, "message": "Invalid access token."})
+        # Second request: succeeds with the freshly fetched token.
+        assert request.headers["Authorization"] == "Bearer tok-2"
+        return httpx.Response(200, json={"id": "user-1", "email": "a@b.c"})
+
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport) as http:
+        api = client_mod.ApiClient(_creds(), http_client=http)
+        result = api.request("GET", "/users/me")
+
+    assert result == {"id": "user-1", "email": "a@b.c"}
+    assert request_count["n"] == 2
+    assert fetch_calls["n"] == 2  # initial + force-refresh after 401
+
+
+def test_request_does_not_loop_on_persistent_401(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If the second attempt also 401s, propagate as ZoomApiError. Never
+    loop more than once — bad credentials would otherwise fetch tokens
+    indefinitely."""
+
+    fetch_calls = {"n": 0}
+
+    def fake_fetch(*_args, **_kwargs) -> oauth.AccessToken:
+        fetch_calls["n"] += 1
+        return oauth.AccessToken(
+            value=f"tok-{fetch_calls['n']}",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            scopes=(),
+        )
+
+    monkeypatch.setattr(oauth, "fetch_access_token", fake_fetch)
+
+    request_count = {"n": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        request_count["n"] += 1
+        return httpx.Response(401, json={"code": 124, "message": "Invalid access token."})
+
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport) as http:
+        api = client_mod.ApiClient(_creds(), http_client=http)
+        with pytest.raises(client_mod.ZoomApiError) as excinfo:
+            api.request("GET", "/users/me")
+
+    assert excinfo.value.status_code == 401
+    assert request_count["n"] == 2  # original + exactly one retry, then propagate
+    assert fetch_calls["n"] == 2
+
+
+def test_request_does_not_retry_on_non_401_4xx(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 403 / 404 / 429 should NOT trigger the auth-refresh retry path —
+    those aren't auth problems and re-issuing wastes a token fetch."""
+
+    fetch_calls = {"n": 0}
+
+    def fake_fetch(*_args, **_kwargs) -> oauth.AccessToken:
+        fetch_calls["n"] += 1
+        return oauth.AccessToken(
+            value="tok",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            scopes=(),
+        )
+
+    monkeypatch.setattr(oauth, "fetch_access_token", fake_fetch)
+
+    request_count = {"n": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        request_count["n"] += 1
+        return httpx.Response(403, json={"code": 200, "message": "Insufficient privileges."})
+
+    transport = httpx.MockTransport(handler)
+    with httpx.Client(transport=transport) as http:
+        api = client_mod.ApiClient(_creds(), http_client=http)
+        with pytest.raises(client_mod.ZoomApiError):
+            api.request("GET", "/users/me")
+
+    assert request_count["n"] == 1  # no retry
+    assert fetch_calls["n"] == 1

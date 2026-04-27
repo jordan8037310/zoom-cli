@@ -218,3 +218,35 @@ def test_fetch_access_token_raises_zoom_auth_error_on_garbage_2xx() -> None:
             S2SCredentials(account_id="a", client_id="b", client_secret="c"),
             client=http,
         )
+
+
+# ---- #47: token expiry skew ---------------------------------------------
+
+
+def test_access_token_is_expired_within_skew_window() -> None:
+    """Closes #47 (partial): a token with 30s left until expiry is treated
+    as expired. Default skew is 60s — see ``oauth.EXPIRY_SKEW_SECONDS``."""
+    from datetime import timedelta
+
+    near_expiry = oauth.AccessToken(
+        value="t",
+        expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        scopes=(),
+    )
+    assert near_expiry.is_expired is True
+
+
+def test_access_token_not_expired_outside_skew_window() -> None:
+    from datetime import timedelta
+
+    well_in_future = oauth.AccessToken(
+        value="t",
+        expires_at=datetime.now(timezone.utc) + timedelta(seconds=600),
+        scopes=(),
+    )
+    assert well_in_future.is_expired is False
+
+
+def test_expiry_skew_constant_is_pinned() -> None:
+    """Pin the constant so a future tweak shows up in review."""
+    assert oauth.EXPIRY_SKEW_SECONDS == 60
