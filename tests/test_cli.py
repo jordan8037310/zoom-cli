@@ -1587,3 +1587,300 @@ def test_users_settings_get_specific_user(
     result = runner.invoke(main, ["users", "settings", "get", "u-42"])
     assert result.exit_code == 0, result.output
     assert captured["user_id"] == "u-42"
+
+
+# ---- #15: zoom recordings list / get / download / delete ----------------
+
+
+def _patch_recordings_module(monkeypatch: pytest.MonkeyPatch, **funcs):
+    import zoom_cli.__main__ as main_mod
+
+    for name, fn in funcs.items():
+        monkeypatch.setattr(main_mod.recordings, name, fn)
+    monkeypatch.setattr(
+        main_mod.oauth, "fetch_access_token", lambda *_a, **_k: _fake_access_token()
+    )
+
+
+# list
+
+
+def test_recordings_list_bails_when_no_credentials(runner: CliRunner) -> None:
+    result = runner.invoke(main, ["recordings", "list"])
+    assert result.exit_code == 1
+    assert "No Server-to-Server" in result.output
+
+
+def test_recordings_list_prints_tab_separated_with_header(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_list_recordings(_client, *, user_id, from_, to, page_size):
+        captured.update({"user_id": user_id, "from_": from_, "to": to, "page_size": page_size})
+        return iter(
+            [
+                {
+                    "uuid": "uuid-1",
+                    "id": 11,
+                    "topic": "M1",
+                    "start_time": "2026-04-28T10:00:00Z",
+                    "recording_files": [{"id": "f1"}, {"id": "f2"}],
+                },
+                {
+                    "uuid": "uuid-2",
+                    "id": 22,
+                    "topic": "M2",
+                    "start_time": "2026-04-29T11:00:00Z",
+                    "recording_files": [],
+                },
+            ]
+        )
+
+    _patch_recordings_module(monkeypatch, list_recordings=fake_list_recordings)
+
+    result = runner.invoke(main, ["recordings", "list"])
+    assert result.exit_code == 0, result.output
+    lines = result.output.strip().split("\n")
+    assert lines[0] == "uuid\tmeeting_id\ttopic\tstart_time\tfile_count"
+    assert lines[1] == "uuid-1\t11\tM1\t2026-04-28T10:00:00Z\t2"
+    assert lines[2] == "uuid-2\t22\tM2\t2026-04-29T11:00:00Z\t0"
+
+    assert captured["user_id"] == "me"
+    assert captured["from_"] is None
+    assert captured["to"] is None
+    assert captured["page_size"] == 300
+
+
+def test_recordings_list_forwards_date_filters(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_list_recordings(_client, *, user_id, from_, to, page_size):
+        captured.update({"from_": from_, "to": to})
+        return iter([])
+
+    _patch_recordings_module(monkeypatch, list_recordings=fake_list_recordings)
+    result = runner.invoke(
+        main,
+        ["recordings", "list", "--from", "2026-04-01", "--to", "2026-04-30"],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["from_"] == "2026-04-01"
+    assert captured["to"] == "2026-04-30"
+
+
+# get
+
+
+def test_recordings_get_prints_json(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    _save_creds()
+
+    def fake_get_recordings(_client, meeting_id):
+        return {"id": meeting_id, "recording_files": [{"id": "f1", "file_type": "MP4"}]}
+
+    _patch_recordings_module(monkeypatch, get_recordings=fake_get_recordings)
+    result = runner.invoke(main, ["recordings", "get", "12345"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert parsed["id"] == "12345"
+    assert parsed["recording_files"][0]["file_type"] == "MP4"
+
+
+# download
+
+
+def test_recordings_download_writes_each_file(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+
+    def fake_get(_client, meeting_id):
+        return {
+            "recording_files": [
+                {
+                    "id": "f1",
+                    "file_type": "MP4",
+                    "file_extension": "MP4",
+                    "recording_type": "shared_screen_with_speaker_view",
+                    "download_url": "https://files.zoom.us/rec/f1",
+                },
+                {
+                    "id": "f2",
+                    "file_type": "M4A",
+                    "file_extension": "M4A",
+                    "recording_type": "audio_only",
+                    "download_url": "https://files.zoom.us/rec/f2",
+                },
+            ]
+        }
+
+    written = []
+
+    def fake_stream(self, url, dest):
+        # Mirror stream_download: write something and return bytes.
+        with open(dest, "wb") as f:
+            f.write(b"data-for:" + url.encode())
+        written.append((url, dest))
+        return 99
+
+    _patch_recordings_module(monkeypatch, get_recordings=fake_get)
+    monkeypatch.setattr("zoom_cli.api.client.ApiClient.stream_download", fake_stream)
+
+    out_dir = tmp_path / "downloads"
+    result = runner.invoke(main, ["recordings", "download", "12345", "--out-dir", str(out_dir)])
+    assert result.exit_code == 0, result.output
+    assert len(written) == 2
+    # Filename convention: <meeting_id>-<recording_type>.<ext>
+    paths = sorted(p for _u, p in written)
+    assert paths[0].endswith("12345-audio_only.m4a")
+    assert paths[1].endswith("12345-shared_screen_with_speaker_view.mp4")
+
+
+def test_recordings_download_filter_by_file_type(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+
+    def fake_get(_client, _meeting_id):
+        return {
+            "recording_files": [
+                {
+                    "id": "f1",
+                    "file_type": "MP4",
+                    "file_extension": "MP4",
+                    "recording_type": "x",
+                    "download_url": "https://x",
+                },
+                {
+                    "id": "f2",
+                    "file_type": "CHAT",
+                    "file_extension": "TXT",
+                    "recording_type": "y",
+                    "download_url": "https://y",
+                },
+            ]
+        }
+
+    written: list = []
+
+    def fake_stream(self, url, dest):
+        with open(dest, "wb") as f:
+            f.write(b"x")
+        written.append(url)
+        return 1
+
+    _patch_recordings_module(monkeypatch, get_recordings=fake_get)
+    monkeypatch.setattr("zoom_cli.api.client.ApiClient.stream_download", fake_stream)
+
+    result = runner.invoke(
+        main,
+        [
+            "recordings",
+            "download",
+            "12345",
+            "--out-dir",
+            str(tmp_path),
+            "--file-type",
+            "MP4",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert written == ["https://x"]
+
+
+def test_recordings_download_handles_no_files(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    _patch_recordings_module(monkeypatch, get_recordings=lambda _c, _id: {"recording_files": []})
+    result = runner.invoke(main, ["recordings", "download", "12345", "--out-dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert "No recording files" in result.output
+
+
+# delete
+
+
+def test_recordings_delete_dry_run_no_api_call(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    called = {"n": 0}
+
+    def fake_delete(*_a, **_k):
+        called["n"] += 1
+
+    _patch_recordings_module(monkeypatch, delete_recordings=fake_delete)
+    result = runner.invoke(main, ["recordings", "delete", "12345", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "[dry-run]" in result.output
+    assert called["n"] == 0
+
+
+def test_recordings_delete_default_trash_confirm(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    _patch_recordings_module(monkeypatch, delete_recordings=lambda *_a, **_k: None)
+    result = runner.invoke(main, ["recordings", "delete", "12345"], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "Move" in result.output and "trash" in result.output
+    assert "Aborted" in result.output
+
+
+def test_recordings_delete_action_delete_louder_prompt(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    _patch_recordings_module(monkeypatch, delete_recordings=lambda *_a, **_k: None)
+    result = runner.invoke(
+        main, ["recordings", "delete", "12345", "--action", "delete"], input="n\n"
+    )
+    assert result.exit_code == 0, result.output
+    assert "Permanently delete" in result.output
+    assert "cannot be undone" in result.output
+
+
+def test_recordings_delete_yes_skips_confirmation(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_delete(_client, meeting_id, *, action):
+        captured.update({"meeting_id": meeting_id, "action": action})
+
+    _patch_recordings_module(monkeypatch, delete_recordings=fake_delete)
+    result = runner.invoke(main, ["recordings", "delete", "12345", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured == {"meeting_id": "12345", "action": "trash"}
+    assert "Trashed" in result.output
+
+
+def test_recordings_delete_single_file_with_file_id(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_delete_file(_client, meeting_id, recording_id, *, action):
+        captured.update({"meeting_id": meeting_id, "recording_id": recording_id, "action": action})
+
+    # Patch the single-file delete; the bulk delete should NOT be called.
+    bulk_called = {"n": 0}
+    _patch_recordings_module(
+        monkeypatch,
+        delete_recording_file=fake_delete_file,
+        delete_recordings=lambda *_a, **_k: bulk_called.__setitem__("n", bulk_called["n"] + 1),
+    )
+
+    result = runner.invoke(main, ["recordings", "delete", "12345", "--file-id", "rec-abc", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured == {"meeting_id": "12345", "recording_id": "rec-abc", "action": "trash"}
+    assert bulk_called["n"] == 0

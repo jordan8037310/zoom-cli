@@ -8,7 +8,7 @@ import questionary
 from click_default_group import DefaultGroup
 
 from zoom_cli import auth
-from zoom_cli.api import meetings, oauth, users
+from zoom_cli.api import meetings, oauth, recordings, users
 from zoom_cli.api.client import ApiClient, ZoomApiError
 from zoom_cli.commands import (
     _edit,
@@ -932,6 +932,219 @@ def meetings_end(meeting_id, yes):
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
     click.echo(f"Ended meeting {meeting_id}.")
+
+
+# ---- Zoom Cloud Recordings ----------------------------------------------
+#
+# Closes #15. Same confirmation-flow design as `meetings delete`:
+#   - delete always confirms unless --yes
+#   - --action delete (permanent) gets a louder prompt than the default
+#     trash (recoverable for 30 days)
+#   - --dry-run for previews
+#
+# `download` is read-only on Zoom's side (just fetches files) so no
+# confirmation needed. By default it writes one file per recording asset
+# into --out-dir; --file-type filters to just MP4, M4A, etc.
+
+
+@main.group(
+    "recordings",
+    help="Zoom Cloud Recordings API (https://developers.zoom.us/docs/api/cloud-recording/).",
+)
+def recordings_cmd():
+    """Group for ``zoom recordings ...``."""
+
+
+@recordings_cmd.command("list", help="List recorded meetings (paginated).")
+@click.option(
+    "--user-id",
+    default="me",
+    show_default=True,
+    help="Whose recordings to list. Default 'me'.",
+)
+@click.option(
+    "--from",
+    "from_",
+    metavar="YYYY-MM-DD",
+    help="Lower bound on meeting start (ISO date).",
+)
+@click.option("--to", metavar="YYYY-MM-DD", help="Upper bound on meeting start (ISO date).")
+@click.option(
+    "--page-size",
+    type=click.IntRange(1, 300),
+    default=300,
+    show_default=True,
+    help="Items per page request.",
+)
+@_translate_keyring_errors
+def recordings_list(user_id, from_, to, page_size):
+    """Output is tab-separated (uuid\\tmeeting_id\\ttopic\\tstart_time\\tfile_count)
+    so it pipes into cut/awk/column."""
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            click.echo("uuid\tmeeting_id\ttopic\tstart_time\tfile_count")
+            for meeting in recordings.list_recordings(
+                client,
+                user_id=user_id,
+                from_=from_,
+                to=to,
+                page_size=page_size,
+            ):
+                click.echo(
+                    f"{meeting.get('uuid', '')}\t"
+                    f"{meeting.get('id', '')}\t"
+                    f"{meeting.get('topic', '')}\t"
+                    f"{meeting.get('start_time', '')}\t"
+                    f"{len(meeting.get('recording_files', []))}"
+                )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+
+
+@recordings_cmd.command(
+    "get",
+    help="Print a meeting's recording metadata as JSON (GET /meetings/<id>/recordings).",
+)
+@click.argument("meeting_id")
+@_translate_keyring_errors
+def recordings_get(meeting_id):
+    """Output is the raw JSON envelope (sort_keys for diff-friendly).
+    Pipe through `jq` to extract download URLs or filter by file_type."""
+    import json as _json
+
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            envelope = recordings.get_recordings(client, meeting_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(_json.dumps(envelope, indent=2, sort_keys=True))
+
+
+@recordings_cmd.command(
+    "download",
+    help="Download recording files for a meeting to disk.",
+)
+@click.argument("meeting_id")
+@click.option(
+    "--out-dir",
+    type=click.Path(file_okay=False, writable=True, resolve_path=True),
+    default=".",
+    show_default=True,
+    help="Directory to write files into. Created automatically if missing.",
+)
+@click.option(
+    "--file-type",
+    multiple=True,
+    metavar="TYPE",
+    help=(
+        "Filter by file_type (MP4, M4A, CHAT, TRANSCRIPT, TIMELINE, CC, CSV). "
+        "May be repeated to include multiple types. Omit to download all."
+    ),
+)
+@_translate_keyring_errors
+def recordings_download(meeting_id, out_dir, file_type):
+    """Streams each file to disk via tempfile + os.replace, so a network
+    drop mid-download leaves no half-written file at the target path.
+
+    Filename convention: <meeting_id>-<recording_type>.<file_extension>.
+    Conflicts (same recording_type appearing twice) are disambiguated by
+    appending the recording_id."""
+    import os
+    import pathlib
+
+    pathlib.Path(out_dir).mkdir(parents=True, exist_ok=True)
+    type_filter = {t.upper() for t in file_type} if file_type else None
+
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            envelope = recordings.get_recordings(client, meeting_id)
+            files = envelope.get("recording_files", []) or []
+            if type_filter is not None:
+                files = [f for f in files if (f.get("file_type") or "").upper() in type_filter]
+            if not files:
+                click.echo(f"No recording files for meeting {meeting_id}.")
+                return
+
+            seen_names: set[str] = set()
+            for f in files:
+                ext = (f.get("file_extension") or "bin").lower()
+                rtype = (f.get("recording_type") or f.get("file_type") or "file").lower()
+                base = f"{meeting_id}-{rtype}.{ext}"
+                if base in seen_names:
+                    base = f"{meeting_id}-{rtype}-{f.get('id', '')}.{ext}"
+                seen_names.add(base)
+                dest = os.path.join(out_dir, base)
+                url = f.get("download_url")
+                if not url:
+                    click.echo(f"Skipping {base} — no download_url in payload.", err=True)
+                    continue
+                bytes_written = client.stream_download(url, dest)
+                click.echo(f"Downloaded {dest} ({bytes_written} bytes)")
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+
+
+@recordings_cmd.command(
+    "delete",
+    help="Delete a meeting's recordings (DELETE /meetings/<id>/recordings).",
+)
+@click.argument("meeting_id")
+@click.option(
+    "--file-id",
+    help="Delete a single recording file. Omit to delete ALL files for the meeting.",
+)
+@click.option(
+    "--action",
+    type=click.Choice(list(recordings.ALLOWED_DELETE_ACTIONS)),
+    default="trash",
+    show_default=True,
+    help=(
+        "trash: move to Zoom's trash (recoverable for 30 days); delete: permanent, irreversible."
+    ),
+)
+@click.option("--yes", "-y", is_flag=True, default=False, help="Skip the confirmation prompt.")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Show what would happen without calling the API.",
+)
+@_translate_keyring_errors
+def recordings_delete(meeting_id, file_id, action, yes, dry_run):
+    """Always confirms unless --yes. The prompt is louder for
+    `--action delete` (permanent) than for the default trash."""
+    target = (
+        f"recording file {file_id} of meeting {meeting_id}"
+        if file_id
+        else f"all recordings for meeting {meeting_id}"
+    )
+    if dry_run:
+        click.echo(f"[dry-run] Would {action} {target}.")
+        return
+
+    if not yes:
+        if action == "delete":
+            prompt = f"Permanently delete {target}? This cannot be undone."
+        else:
+            prompt = f"Move {target} to trash? (Recoverable for 30 days.)"
+        if not click.confirm(prompt, default=False):
+            click.echo("Aborted.")
+            return
+
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            if file_id:
+                recordings.delete_recording_file(client, meeting_id, file_id, action=action)
+            else:
+                recordings.delete_recordings(client, meeting_id, action=action)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    verb = "Deleted" if action == "delete" else "Trashed"
+    click.echo(f"{verb} {target}.")
 
 
 if __name__ == "__main__":

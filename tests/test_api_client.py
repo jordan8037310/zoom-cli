@@ -599,3 +599,116 @@ def test_delete_delegates_to_request(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert captured["method"] == "DELETE"
     assert "foo=bar" in captured["url"]
+
+
+# ---- stream_download ---------------------------------------------------
+
+
+def test_stream_download_writes_bytes_to_dest_atomically(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Body is streamed to tempfile + os.replace; auth header is the bearer."""
+    monkeypatch.setattr(oauth, "fetch_access_token", lambda *_a, **_k: _fresh_token("tok-X"))
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, content=b"hello world\n")
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    dest = tmp_path / "out.bin"
+    with ApiClient(_creds(), http_client=http) as c:
+        n = c.stream_download("https://files.zoom.us/rec/abc", str(dest))
+
+    assert dest.read_bytes() == b"hello world\n"
+    assert n == len(b"hello world\n")
+    assert captured["url"] == "https://files.zoom.us/rec/abc"
+    assert captured["auth"] == "Bearer tok-X"
+
+
+def test_stream_download_retries_once_on_401(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """First 401 → cache invalidated → fresh token → retry succeeds."""
+    fetch_calls = {"n": 0}
+
+    def fake_fetch(*_a, **_k):
+        fetch_calls["n"] += 1
+        return _fresh_token(f"tok-{fetch_calls['n']}")
+
+    monkeypatch.setattr(oauth, "fetch_access_token", fake_fetch)
+
+    request_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_count["n"] += 1
+        if request_count["n"] == 1:
+            return httpx.Response(401, content=b"")
+        return httpx.Response(200, content=b"second-attempt-body")
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    dest = tmp_path / "out.bin"
+    with ApiClient(_creds(), http_client=http) as c:
+        n = c.stream_download("https://files.zoom.us/rec/abc", str(dest))
+
+    assert dest.read_bytes() == b"second-attempt-body"
+    assert n == len(b"second-attempt-body")
+    assert fetch_calls["n"] == 2  # initial + force-refresh
+    assert request_count["n"] == 2  # original 401 + retry
+
+
+def test_stream_download_raises_on_404(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setattr(oauth, "fetch_access_token", lambda *_a, **_k: _fresh_token())
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, content=b"file not found")
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    dest = tmp_path / "out.bin"
+    with (
+        ApiClient(_creds(), http_client=http) as c,
+        pytest.raises(client_mod.ZoomApiError) as excinfo,
+    ):
+        c.stream_download("https://files.zoom.us/rec/abc", str(dest))
+
+    assert excinfo.value.status_code == 404
+    assert not dest.exists()  # no partial file left behind
+
+
+def test_stream_download_cleans_up_tempfile_on_partial(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """If the body iteration raises mid-stream, the tempfile is unlinked
+    so dest_path stays untouched and there's no orphan file in dest_dir."""
+    monkeypatch.setattr(oauth, "fetch_access_token", lambda *_a, **_k: _fresh_token())
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        # Body that raises mid-iteration is hard to fake with MockTransport,
+        # so we simulate by having the handler return enormous Content-Length
+        # but then close. Simpler: just monkeypatch iter_bytes to raise.
+        return httpx.Response(200, content=b"start")
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    dest = tmp_path / "out.bin"
+
+    # Patch iter_bytes on every Response to raise once we've started.
+    real_iter = httpx.Response.iter_bytes
+
+    def boom(self, *_a, **_kw):
+        # Yield one chunk then raise, so the file is created but partial.
+        for chunk in real_iter(self):
+            yield chunk
+            raise RuntimeError("simulated mid-stream failure")
+
+    monkeypatch.setattr(httpx.Response, "iter_bytes", boom)
+
+    with (
+        ApiClient(_creds(), http_client=http) as c,
+        pytest.raises(RuntimeError, match="simulated"),
+    ):
+        c.stream_download("https://files.zoom.us/rec/abc", str(dest))
+
+    # dest_path must not exist (we never reached os.replace).
+    assert not dest.exists()
+    # And no .zoom-dl.* tempfile should be left in tmp_path.
+    leftovers = list(tmp_path.glob(".zoom-dl.*"))
+    assert leftovers == []

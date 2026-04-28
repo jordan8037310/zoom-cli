@@ -14,7 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Users CLI surface (PR #50): closes #14 (read-only piece). New `zoom users list` and `zoom users get <user-id>` commands.
 > Meetings CLI surface (PR #51): closes #13 (read-only piece). New `zoom meetings list` and `zoom meetings get <meeting-id>` commands; `zoom_cli/api/meetings.py` mirrors the structure of `users.py`.
 > Meetings write surface (PR #52): closes #13 (write piece). New `zoom meetings create / update / delete / end` commands. `ApiClient` gains `post`/`patch`/`put`/`delete` convenience wrappers.
-> Users write surface (this branch): closes #14 (write + settings-read piece). New `zoom users create / delete / settings get` commands.
+> Users write surface (PR #53): closes #14 (write + settings-read piece). New `zoom users create / delete / settings get` commands.
+> Recordings surface (this branch): closes #15. New `zoom recordings list / get / download / delete` commands; `zoom_cli/api/recordings.py`; `ApiClient.stream_download` for atomic streamed downloads.
+
+### Added (issue #15)
+- `zoom recordings list [--user-id me] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--page-size N]` — paginates `GET /users/<user-id>/recordings`. TSV output: `uuid\tmeeting_id\ttopic\tstart_time\tfile_count`.
+- `zoom recordings get <meeting-id>` — `GET /meetings/<meeting-id>/recordings`. Pretty-printed JSON for piping through `jq`.
+- `zoom recordings download <meeting-id> [--out-dir DIR] [--file-type TYPE ...]` — fetches the meeting's recording metadata, then streams each file to disk via the new `ApiClient.stream_download`. Atomic per-file writes (sibling tempfile + `os.replace`) so a network drop never leaves half a file at the destination. `--file-type` is repeatable to filter to MP4/M4A/CHAT/etc. Filename convention: `<meeting_id>-<recording_type>.<ext>` (collision-disambiguated by recording_id).
+- `zoom recordings delete <meeting-id> [--file-id ID] [--action trash|delete] [--yes] [--dry-run]` — `DELETE /meetings/<id>/recordings` (or `/recordings/<file-id>` if `--file-id`). Always confirms unless `--yes`; louder prompt for `--action delete` (permanent) than the default `trash` (recoverable for 30 days).
+- API helpers: `recordings.list_recordings / get_recordings / delete_recordings / delete_recording_file`. `ALLOWED_DELETE_ACTIONS` constant pinned by tests.
+- `ApiClient.stream_download(url, dest_path)` — bearer-authenticated streamed GET with atomic tempfile-then-replace write semantics. Single-shot 401 retry with force-refresh (same policy as `request`); 429 on Zoom's download host is uncommon enough that it's deferred to issue #49.
 
 ### Added (issue #14, write piece)
 - `zoom users create --email ... --type N [--first-name ...] [--last-name ...] [--display-name ...] [--password ...] [--action create|autoCreate|custCreate|ssoCreate]` — `POST /users`. Builds Zoom's `{action, user_info}` envelope from flat flags.
