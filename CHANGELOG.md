@@ -24,7 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Webhook receiver (PR #60): closes #17. New `zoom webhook serve` command + `zoom_cli/api/webhook.py` with constant-time HMAC verification and the endpoint.url_validation handshake.
 > Zoom Phone API (PR #61): closes #18 (read-only piece). New `zoom phone users / call-logs / queues / recordings list/get` commands; `zoom_cli/api/phone.py`; tier mappings extended for `/phone/*` endpoints.
 > Zoom Team Chat API (PR #62): closes #19. New `zoom chat channels list` and `zoom chat messages send` commands; `zoom_cli/api/chat.py`.
-> Zoom Reports API (this branch): closes #20. New `zoom reports daily / meetings list / meetings participants / operationlogs list` commands; `zoom_cli/api/reports.py`; tier mappings extended for `/report/*` (HEAVY tier).
+> Zoom Reports API (PR #63): closes #20. New `zoom reports daily / meetings list / meetings participants / operationlogs list` commands; `zoom_cli/api/reports.py`; tier mappings extended for `/report/*` (HEAVY tier).
+> Zoom Dashboard API (this branch): closes #21. New `zoom dashboard meetings list / get / participants` and `zoom dashboard zoomrooms list / get` commands; `zoom_cli/api/dashboard.py`; tier mappings extended for `/metrics/*` (HEAVY tier). Requires Business+ Zoom plan.
+
+### Added (issue #21)
+- `zoom_cli/api/dashboard.py` — `list_meetings(client, *, type, from_, to)`, `get_meeting(client, meeting_id)`, `list_meeting_participants(client, meeting_id, *, type)`, `list_zoomrooms(client)`, `get_zoomroom(client, room_id)`. `type` validated against `ALLOWED_MEETING_METRIC_TYPES = ("past", "live", "pastOne")`. URL-encodes meeting_id and room_id.
+- CLI:
+  - `zoom dashboard meetings list --from --to [--type past|live|pastOne] [--page-size]` — TSV per meeting.
+  - `zoom dashboard meetings get <meeting-id>` — JSON dump.
+  - `zoom dashboard meetings participants <meeting-id> [--type] [--page-size]` — TSV per participant.
+  - `zoom dashboard zoomrooms list [--page-size]` — TSV per room.
+  - `zoom dashboard zoomrooms get <room-id>` — JSON dump.
+- `rate_limit.ENDPOINT_TIERS` extended with `/metrics/.*` → `Tier.HEAVY` (matches Zoom's published table). Tests cover every endpoint plus an unmapped wildcard.
 
 ### Added (issue #20)
 - `zoom_cli/api/reports.py` — `get_daily(client, *, year, month)`, `list_meetings_report(client, *, user_id, from_, to, meeting_type, page_size)`, `list_meeting_participants(client, meeting_id, *, page_size)`, `list_operation_logs(client, *, from_, to, category_type, page_size)`. All paginated except `get_daily` (Zoom returns the whole month). URL-encodes `meeting_id` (Zoom UUIDs sometimes contain `/` so this is needed for correctness, not just defense).

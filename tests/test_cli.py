@@ -2517,3 +2517,196 @@ def test_reports_operationlogs_list_forwards_filters(
         "to": "2026-04-30",
         "category_type": "user",
     }
+
+
+# ---- #21: zoom dashboard CLI -------------------------------------------
+
+
+def _patch_dashboard_module(monkeypatch: pytest.MonkeyPatch, **funcs):
+    import zoom_cli.__main__ as main_mod
+
+    for name, fn in funcs.items():
+        monkeypatch.setattr(main_mod.dashboard, name, fn)
+    monkeypatch.setattr(
+        main_mod.oauth, "fetch_access_token", lambda *_a, **_k: _fake_access_token()
+    )
+
+
+def test_dashboard_meetings_list_requires_dates(runner: CliRunner) -> None:
+    _save_creds()
+    result = runner.invoke(main, ["dashboard", "meetings", "list"])
+    assert result.exit_code != 0
+
+
+def test_dashboard_meetings_list_prints_tab_separated(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, *, type, from_, to, page_size):
+        return iter(
+            [
+                {
+                    "uuid": "u-1",
+                    "id": 11,
+                    "topic": "T",
+                    "host": "alice@example.com",
+                    "participants": 5,
+                    "duration": 30,
+                    "start_time": "2026-04-28T10:00:00Z",
+                },
+            ]
+        )
+
+    _patch_dashboard_module(monkeypatch, list_meetings=fake_list)
+    result = runner.invoke(
+        main,
+        [
+            "dashboard",
+            "meetings",
+            "list",
+            "--from",
+            "2026-04-01",
+            "--to",
+            "2026-04-30",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    lines = result.output.strip().split("\n")
+    assert lines[0] == "uuid\tid\ttopic\thost\tparticipants\tduration\tstart_time"
+    assert lines[1] == "u-1\t11\tT\talice@example.com\t5\t30\t2026-04-28T10:00:00Z"
+
+
+def test_dashboard_meetings_list_forwards_type(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_list(_client, *, type, from_, to, page_size):
+        captured["type"] = type
+        return iter([])
+
+    _patch_dashboard_module(monkeypatch, list_meetings=fake_list)
+    result = runner.invoke(
+        main,
+        [
+            "dashboard",
+            "meetings",
+            "list",
+            "--from",
+            "2026-04-01",
+            "--to",
+            "2026-04-30",
+            "--type",
+            "live",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["type"] == "live"
+
+
+def test_dashboard_meetings_list_rejects_invalid_type(runner: CliRunner) -> None:
+    _save_creds()
+    result = runner.invoke(
+        main,
+        [
+            "dashboard",
+            "meetings",
+            "list",
+            "--from",
+            "2026-04-01",
+            "--to",
+            "2026-04-30",
+            "--type",
+            "garbage",
+        ],
+    )
+    assert result.exit_code != 0
+
+
+def test_dashboard_meetings_get_prints_json(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_get(_client, meeting_id):
+        return {"id": meeting_id, "topic": "M", "duration": 45}
+
+    _patch_dashboard_module(monkeypatch, get_meeting=fake_get)
+    result = runner.invoke(main, ["dashboard", "meetings", "get", "12345"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert parsed["id"] == "12345"
+
+
+def test_dashboard_meetings_participants_prints_tab_separated(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, meeting_id, *, type, page_size):
+        return iter(
+            [
+                {
+                    "id": "p-1",
+                    "user_id": "u-1",
+                    "user_name": "Alice",
+                    "join_time": "2026-04-28T10:00:00Z",
+                    "leave_time": "2026-04-28T10:30:00Z",
+                    "duration": 1800,
+                },
+            ]
+        )
+
+    _patch_dashboard_module(monkeypatch, list_meeting_participants=fake_list)
+    result = runner.invoke(main, ["dashboard", "meetings", "participants", "12345"])
+    assert result.exit_code == 0, result.output
+    lines = result.output.strip().split("\n")
+    assert lines[0] == "id\tuser_id\tuser_name\tjoin_time\tleave_time\tduration"
+    assert lines[1] == ("p-1\tu-1\tAlice\t2026-04-28T10:00:00Z\t2026-04-28T10:30:00Z\t1800")
+
+
+def test_dashboard_zoomrooms_list_prints_tab_separated(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, *, page_size):
+        return iter(
+            [
+                {
+                    "id": "r-1",
+                    "room_name": "Conference A",
+                    "status": "Available",
+                    "device_ip": "192.168.1.10",
+                    "last_start_time": "2026-04-28T08:00:00Z",
+                },
+            ]
+        )
+
+    _patch_dashboard_module(monkeypatch, list_zoomrooms=fake_list)
+    result = runner.invoke(main, ["dashboard", "zoomrooms", "list"])
+    assert result.exit_code == 0, result.output
+    lines = result.output.strip().split("\n")
+    assert lines[0] == "id\troom_name\tstatus\tdevice_ip\tlast_start_time"
+    assert lines[1] == ("r-1\tConference A\tAvailable\t192.168.1.10\t2026-04-28T08:00:00Z")
+
+
+def test_dashboard_zoomrooms_get_prints_json(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_get(_client, room_id):
+        return {"id": room_id, "room_name": "Conference A", "status": "Available"}
+
+    _patch_dashboard_module(monkeypatch, get_zoomroom=fake_get)
+    result = runner.invoke(main, ["dashboard", "zoomrooms", "get", "r-1"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert parsed["id"] == "r-1"
