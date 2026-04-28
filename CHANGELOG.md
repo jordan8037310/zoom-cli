@@ -20,7 +20,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Schema versioning (PR #56): closes #24 (final piece). `meetings.json` now wraps the meetings dict in a `{schema_version, meetings}` envelope; legacy v0 (pre-#24) files read transparently and migrate on first write.
 > Per-tier rate limiting (PR #57): closes #49 (follow-up to #16's partial close). `zoom_cli/api/rate_limit.py` with token-bucket + daily counter + endpoint→tier classification; opt-in via `ApiClient(creds, rate_limiter=RateLimiter())`.
 > Documentation rewrite (PR #58): closes #23. README rewritten around the two-mode reality (local launcher + REST API), full CLI reference, configuration table, security overview; new `examples/` directory with three runnable scripts.
-> Codegen tooling (this branch): closes #22. New `scripts/codegen.py` wraps `datamodel-code-generator` for Pydantic v2 model generation from Zoom's OpenAPI spec. Optional `[codegen]` extra; output gitignored by default.
+> Codegen tooling (PR #59): closes #22. New `scripts/codegen.py` wraps `datamodel-code-generator` for Pydantic v2 model generation from Zoom's OpenAPI spec. Optional `[codegen]` extra; output gitignored by default.
+> Webhook receiver (this branch): closes #17. New `zoom webhook serve` command + `zoom_cli/api/webhook.py` with constant-time HMAC verification and the endpoint.url_validation handshake.
+
+### Added (issue #17)
+- `zoom_cli/api/webhook.py` — pure crypto helpers: `compute_signature(secret_token, timestamp, body)` returns Zoom's `v0=<64-hex>` format; `verify_signature(...)` does constant-time `hmac.compare_digest`; `compute_url_validation_response(secret_token, plain_token)` builds the handshake response. `_make_handler(secret_token, *, sink)` builds a `BaseHTTPRequestHandler` subclass that recognises `endpoint.url_validation` (unsigned by Zoom — special handshake), verifies signed events, rejects tampering with 401 + stderr line, and dumps verified events to the `sink` callable.
+- `zoom webhook serve --secret-token TOKEN [--bind 127.0.0.1] [--port 8000]` CLI command. Picks up `ZOOM_WEBHOOK_SECRET` env var. Default `--bind 127.0.0.1` (loopback only) — use `ngrok http 8000` or similar to expose during development.
+- README "Webhooks" section in the CLI reference.
+
+### Out of scope (deferred)
+- Persistent storage / replay of received events. Stdout is the sink; pipe through `jq`/`tee`/etc. for ad-hoc storage.
+- Timestamp-skew rejection (replay protection beyond signature). The `MAX_TIMESTAMP_SKEW_SECONDS = 300` constant is pinned for a follow-up that wires it into the verification path.
+- TLS termination — use `ngrok` or another reverse proxy for HTTPS.
 
 ### Added (issue #22)
 - `scripts/codegen.py` — reproducible wrapper around `datamodel-code-generator` with the project's preferred flag set pinned in code (Pydantic v2, double quotes, standard collections, py3.10+ syntax, enum-as-literal). Supports `--dry-run` for safe inspection, errors with an actionable message if `datamodel-codegen` isn't installed, propagates non-zero exit codes.
