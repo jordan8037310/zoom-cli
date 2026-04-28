@@ -1843,6 +1843,49 @@ def phone_recordings_cmd():
     pass
 
 
+@phone_recordings_cmd.command(
+    "download",
+    help="Download a single phone call recording to disk.",
+)
+@click.argument("recording_id")
+@click.option(
+    "--out-dir",
+    type=click.Path(file_okay=False, writable=True, resolve_path=True),
+    default=".",
+    show_default=True,
+    help="Directory to write the file into. Created automatically if missing.",
+)
+@_translate_keyring_errors
+def phone_recordings_download(recording_id, out_dir):
+    """Fetches the recording's metadata to learn the download_url, then
+    streams it to disk via the same atomic tempfile + os.replace path
+    used by `zoom recordings download`. Filename convention:
+    ``<recording_id>.<file_extension>``."""
+    import os
+    import pathlib
+
+    pathlib.Path(out_dir).mkdir(parents=True, exist_ok=True)
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            rec = phone.get_phone_recording(client, recording_id)
+            url = rec.get("download_url")
+            if not url:
+                click.echo(
+                    f"No download_url for recording {recording_id} "
+                    "(may already be deleted or trashed).",
+                    err=True,
+                )
+                raise click.exceptions.Exit(code=1)
+            ext = (rec.get("file_extension") or "mp3").lower()
+            dest = os.path.join(out_dir, f"{recording_id}.{ext}")
+            bytes_written = client.stream_download(url, dest)
+            click.echo(f"Downloaded {dest} ({bytes_written} bytes)")
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+
+
 @phone_recordings_cmd.command("list", help="List phone call recordings (paginated).")
 @click.option(
     "--user-id",

@@ -27,7 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Zoom Reports API (PR #63): closes #20. New `zoom reports daily / meetings list / meetings participants / operationlogs list` commands; `zoom_cli/api/reports.py`; tier mappings extended for `/report/*` (HEAVY tier).
 > Zoom Dashboard API (PR #64): closes #21. New `zoom dashboard meetings list / get / participants` and `zoom dashboard zoomrooms list / get` commands; `zoom_cli/api/dashboard.py`; tier mappings extended for `/metrics/*` (HEAVY tier). Requires Business+ Zoom plan.
 > ApiClient user-OAuth integration (PR #65): completes the user-OAuth story from #12. `ApiClient` now accepts either `S2SCredentials` or `UserOAuthCredentials`; the CLI prefers user-OAuth when both are configured.
-> Webhook timestamp-skew enforcement (this branch): closes the deferred replay-protection piece from #17. `MAX_TIMESTAMP_SKEW_SECONDS = 300` is now actually enforced — old / future-dated deliveries are rejected with 401 even if the signature verifies.
+> Webhook timestamp-skew enforcement (PR #66): closes the deferred replay-protection piece from #17. `MAX_TIMESTAMP_SKEW_SECONDS = 300` is now actually enforced — old / future-dated deliveries are rejected with 401 even if the signature verifies.
+> Phone call recording downloads (this branch): closes the deferred download piece from #18. New `zoom phone recordings download <recording-id>` chains `get_phone_recording` (for the URL) with `ApiClient.stream_download` (atomic write).
+
+### Added (post-#18 follow-up)
+- `phone.get_phone_recording(client, recording_id)` — `GET /phone/recordings/<id>`. Returns the single recording's metadata including `download_url` and `file_extension`. URL-encodes the path segment.
+- `zoom phone recordings download <recording-id> [--out-dir DIR]` — fetches the metadata, then streams the audio file to disk via `ApiClient.stream_download` (atomic tempfile + os.replace from PR #54). Filename convention: `<recording_id>.<file_extension>`. Errors with exit 1 + clear message if the recording has no `download_url` (deleted/trashed).
+- `rate_limit.ENDPOINT_TIERS` adds `GET /phone/recordings/<id>` → `Tier.LIGHT` (single-resource read; the listing stays MEDIUM).
 
 ### Added (post-#17 follow-up)
 - `webhook.is_timestamp_within_skew(timestamp_str, *, max_skew_seconds, now_ms)` — pure helper. Symmetric ±300s default window (rejects old replays AND future-dated spoofs); malformed / missing timestamps return False. Injectable `now_ms` for tests; defaults to `time.time() * 1000`.

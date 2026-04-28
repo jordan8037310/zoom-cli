@@ -123,3 +123,31 @@ def test_list_phone_recordings_forwards_date_filters() -> None:
     params = fake_client.get.call_args[1]["params"]
     assert params["from"] == "2026-04-01"
     assert params["to"] == "2026-04-30"
+
+
+# ---- get_phone_recording (single-recording metadata + download) --------
+
+
+def test_get_phone_recording_targets_correct_path() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {
+        "id": "rec-1",
+        "download_url": "https://files.zoom.us/rec/abc",
+        "file_extension": "MP3",
+    }
+
+    result = phone.get_phone_recording(fake_client, "rec-1")
+
+    fake_client.get.assert_called_once_with("/phone/recordings/rec-1")
+    assert result["download_url"] == "https://files.zoom.us/rec/abc"
+
+
+def test_get_phone_recording_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {}
+
+    phone.get_phone_recording(fake_client, "rec/with/slashes")
+
+    arg = fake_client.get.call_args[0][0]
+    assert "rec/with/slashes" not in arg
+    assert "%2F" in arg

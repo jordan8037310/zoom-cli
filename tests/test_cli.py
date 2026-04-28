@@ -2812,3 +2812,93 @@ def test_build_api_client_no_callback_for_s2s() -> None:
         assert client._on_user_token_rotated is None
     finally:
         client.close()
+
+
+# ---- phone recordings download (#18 follow-up) -------------------------
+
+
+def test_phone_recordings_download_writes_file(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Streams the recording to disk via stream_download. Filename
+    convention: <recording_id>.<file_extension>."""
+    _save_creds()
+
+    def fake_get(_client, recording_id):
+        return {
+            "id": recording_id,
+            "download_url": "https://files.zoom.us/rec/abc",
+            "file_extension": "MP3",
+            "duration": 120,
+        }
+
+    written: list = []
+
+    def fake_stream(self, url, dest):
+        with open(dest, "wb") as f:
+            f.write(b"fake audio")
+        written.append((url, dest))
+        return 10
+
+    _patch_phone_module(monkeypatch, get_phone_recording=fake_get)
+    monkeypatch.setattr("zoom_cli.api.client.ApiClient.stream_download", fake_stream)
+
+    out_dir = tmp_path / "downloads"
+    result = runner.invoke(
+        main, ["phone", "recordings", "download", "rec-1", "--out-dir", str(out_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    assert len(written) == 1
+    url, dest = written[0]
+    assert url == "https://files.zoom.us/rec/abc"
+    assert dest.endswith("rec-1.mp3")
+    assert "Downloaded" in result.output
+
+
+def test_phone_recordings_download_errors_on_missing_url(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Recording without download_url (deleted / trashed) → exit 1 with
+    a clear message; nothing written to disk."""
+    _save_creds()
+
+    def fake_get(_client, recording_id):
+        # No download_url field — recording is trashed.
+        return {"id": recording_id, "file_extension": "MP3"}
+
+    _patch_phone_module(monkeypatch, get_phone_recording=fake_get)
+
+    result = runner.invoke(
+        main, ["phone", "recordings", "download", "rec-1", "--out-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 1
+    assert "No download_url" in result.output
+    # Nothing written.
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_phone_recordings_download_defaults_extension_when_missing(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+
+    def fake_get(_client, recording_id):
+        # Some recordings don't include file_extension; default to mp3.
+        return {"id": recording_id, "download_url": "https://x"}
+
+    written: list = []
+
+    def fake_stream(self, _url, dest):
+        with open(dest, "wb") as f:
+            f.write(b"x")
+        written.append(dest)
+        return 1
+
+    _patch_phone_module(monkeypatch, get_phone_recording=fake_get)
+    monkeypatch.setattr("zoom_cli.api.client.ApiClient.stream_download", fake_stream)
+
+    result = runner.invoke(
+        main, ["phone", "recordings", "download", "rec-X", "--out-dir", str(tmp_path)]
+    )
+    assert result.exit_code == 0, result.output
+    assert written[0].endswith("rec-X.mp3")
