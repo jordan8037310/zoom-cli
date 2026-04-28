@@ -749,3 +749,138 @@ def test_apiclient_rate_limiter_acquires_before_send(
     # ApiClient passes the full path (including /v2) to the limiter;
     # tier_for() strips the version prefix before matching.
     assert captured == [("GET", "/v2/users/me")]
+
+
+# ---- ApiClient with UserOAuthCredentials --------------------------------
+
+
+def test_apiclient_with_user_oauth_creds_uses_refresh_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ApiClient routes to user_oauth.refresh_user_tokens when given
+    UserOAuthCredentials instead of S2SCredentials."""
+    from zoom_cli.api import user_oauth as uo
+    from zoom_cli.auth import UserOAuthCredentials
+
+    fetch_calls = {"n": 0}
+
+    def fake_refresh(*, refresh_token, client_id, http=None):
+        fetch_calls["n"] += 1
+        return uo.UserOAuthTokens(
+            access_token=f"acc-{fetch_calls['n']}",
+            refresh_token=f"rotated-refresh-{fetch_calls['n']}",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            scopes=("user:read",),
+        )
+
+    monkeypatch.setattr(uo, "refresh_user_tokens", fake_refresh)
+
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"id": "u-me"})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    user_creds = UserOAuthCredentials(refresh_token="initial-refresh", client_id="cid-X")
+    with ApiClient(user_creds, http_client=http) as c:
+        c.get("/users/me")
+
+    assert fetch_calls["n"] == 1
+    # The refreshed access token is what gets sent as Bearer.
+    assert captured["auth"] == "Bearer acc-1"
+
+
+def test_apiclient_with_user_oauth_creds_invokes_rotation_callback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Refresh tokens are rotated by Zoom — the callback must fire so the
+    caller can persist the new value (the old one is invalidated
+    immediately)."""
+    from zoom_cli.api import user_oauth as uo
+    from zoom_cli.auth import UserOAuthCredentials
+
+    def fake_refresh(*, refresh_token, client_id, http=None):
+        return uo.UserOAuthTokens(
+            access_token="acc",
+            refresh_token="ROTATED",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            scopes=(),
+        )
+
+    monkeypatch.setattr(uo, "refresh_user_tokens", fake_refresh)
+
+    rotated_calls: list[UserOAuthCredentials] = []
+
+    def on_rotated(new_creds):
+        rotated_calls.append(new_creds)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    user_creds = UserOAuthCredentials(refresh_token="OLD", client_id="cid-X")
+    with ApiClient(user_creds, http_client=http, on_user_token_rotated=on_rotated) as c:
+        c.get("/users/me")
+
+    assert len(rotated_calls) == 1
+    assert rotated_calls[0].refresh_token == "ROTATED"
+    assert rotated_calls[0].client_id == "cid-X"
+
+
+def test_apiclient_user_oauth_401_retry_uses_fresh_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The 401 retry path force-refreshes the cached token; for user
+    OAuth that means calling refresh_user_tokens again (and re-rotating)."""
+    from zoom_cli.api import user_oauth as uo
+    from zoom_cli.auth import UserOAuthCredentials
+
+    refresh_calls = {"n": 0}
+
+    def fake_refresh(*, refresh_token, client_id, http=None):
+        refresh_calls["n"] += 1
+        return uo.UserOAuthTokens(
+            access_token=f"acc-{refresh_calls['n']}",
+            refresh_token=f"rot-{refresh_calls['n']}",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            scopes=(),
+        )
+
+    monkeypatch.setattr(uo, "refresh_user_tokens", fake_refresh)
+
+    request_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_count["n"] += 1
+        if request_count["n"] == 1:
+            return httpx.Response(401, json={"code": 124, "message": "expired"})
+        # Second attempt should use the fresh access token (acc-2).
+        assert request.headers["Authorization"] == "Bearer acc-2"
+        return httpx.Response(200, json={"id": "u-me"})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    user_creds = UserOAuthCredentials(refresh_token="initial", client_id="cid-X")
+    with ApiClient(user_creds, http_client=http) as c:
+        result = c.get("/users/me")
+
+    assert result == {"id": "u-me"}
+    assert refresh_calls["n"] == 2  # initial + force-refresh after 401
+    assert request_count["n"] == 2
+
+
+def test_apiclient_s2s_creds_path_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Existing S2S behaviour is not affected by the user-OAuth additions."""
+    monkeypatch.setattr(oauth, "fetch_access_token", lambda *_a, **_k: _fresh_token("s2s-tok"))
+
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    with ApiClient(_creds(), http_client=http) as c:
+        c.get("/users/me")
+
+    assert captured["auth"] == "Bearer s2s-tok"

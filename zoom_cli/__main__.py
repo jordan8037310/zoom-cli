@@ -443,12 +443,47 @@ def _print_user_profile(profile: dict) -> None:
 
 
 def _load_creds_or_exit():
-    """Load S2S creds, exit cleanly with a friendly message if not configured."""
-    creds = auth.load_s2s_credentials()
-    if creds is None:
-        click.echo("No Server-to-Server OAuth credentials saved. Run `zoom auth s2s set` first.")
-        raise click.exceptions.Exit(code=1)
-    return creds
+    """Load credentials for an API call; preferring user-OAuth when configured.
+
+    Resolution order (newer auth surfaces win):
+      1. User-OAuth (``zoom auth login`` / PKCE) — preferred when set.
+      2. S2S OAuth (``zoom auth s2s set``) — the original flow.
+      3. Neither → exit 1 with a friendly message pointing at both
+         setup commands.
+
+    Backward compat: if a CLI command tests for the legacy "No Server-
+    to-Server OAuth credentials saved" message, it'll still match for
+    the no-creds-at-all case (the message starts with that line).
+    """
+    user_creds = auth.load_user_oauth_credentials()
+    if user_creds is not None:
+        return user_creds
+    s2s_creds = auth.load_s2s_credentials()
+    if s2s_creds is not None:
+        return s2s_creds
+    click.echo(
+        "No Server-to-Server OAuth credentials saved. Run one of:\n"
+        "  zoom auth s2s set                       # Server-to-Server OAuth\n"
+        "  zoom auth login --client-id ID          # 3-legged user OAuth"
+    )
+    raise click.exceptions.Exit(code=1)
+
+
+def _build_api_client(creds):
+    """Construct an ``ApiClient`` with the right callbacks for the cred type.
+
+    For user-OAuth credentials, every refresh rotates the persisted
+    refresh_token (Zoom invalidates the old one immediately), so we pass
+    a callback that writes the new value back to the keyring
+    transactionally (mirrors the #35 rollback pattern) — without it,
+    the next CLI invocation would have a dead refresh_token.
+    """
+    if isinstance(creds, auth.UserOAuthCredentials):
+        return ApiClient(
+            creds,
+            on_user_token_rotated=auth.save_user_oauth_credentials,
+        )
+    return ApiClient(creds)
 
 
 def _exit_on_api_error(exc: Exception) -> None:
@@ -477,7 +512,7 @@ def _exit_on_api_error(exc: Exception) -> None:
 def users_me():
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             profile = users.get_me(client)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
@@ -493,7 +528,7 @@ def users_get(user_id):
     follow-up that needs separate confirmation-flow design."""
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             profile = users.get_user(client, user_id)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
@@ -525,7 +560,7 @@ def users_list(status, page_size):
     PR #48 / issue #16."""
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             click.echo("user_id\temail\ttype\tstatus")
             for user in users.list_users(client, status=status, page_size=page_size):
                 click.echo(
@@ -579,7 +614,7 @@ def meetings_get(meeting_id):
     that needs separate confirmation-flow design."""
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             meeting = meetings.get_meeting(client, meeting_id)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
@@ -617,7 +652,7 @@ def meetings_list(user_id, meeting_type, page_size):
     (PR #48 / #16). Closes #13 (read-only piece)."""
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             click.echo("id\ttopic\ttype\tstart_time\tduration")
             for meeting in meetings.list_meetings(
                 client,
@@ -687,7 +722,7 @@ def users_create(email, user_type, first_name, last_name, display_name, password
 
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             created = users.create_user(client, user_info, action=action)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
@@ -773,7 +808,7 @@ def users_delete(
 
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             users.delete_user(
                 client,
                 user_id,
@@ -811,7 +846,7 @@ def users_settings_get(user_id):
 
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             settings = users.get_user_settings(client, user_id)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
@@ -901,7 +936,7 @@ def meetings_create(topic, meeting_type, start_time, duration, tz, password, age
     )
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             created = meetings.create_meeting(client, payload, user_id=user_id)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
@@ -940,7 +975,7 @@ def meetings_update(meeting_id, topic, meeting_type, start_time, duration, tz, p
         raise click.exceptions.Exit(code=1)
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             meetings.update_meeting(client, meeting_id, payload)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
@@ -992,7 +1027,7 @@ def meetings_delete(meeting_id, yes, dry_run, notify_host, notify_registrants):
 
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             meetings.delete_meeting(
                 client,
                 meeting_id,
@@ -1028,7 +1063,7 @@ def meetings_end(meeting_id, yes):
 
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             meetings.end_meeting(client, meeting_id)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
@@ -1083,7 +1118,7 @@ def recordings_list(user_id, from_, to, page_size):
     so it pipes into cut/awk/column."""
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             click.echo("uuid\tmeeting_id\ttopic\tstart_time\tfile_count")
             for meeting in recordings.list_recordings(
                 client,
@@ -1116,7 +1151,7 @@ def recordings_get(meeting_id):
 
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             envelope = recordings.get_recordings(client, meeting_id)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
@@ -1160,7 +1195,7 @@ def recordings_download(meeting_id, out_dir, file_type):
 
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             envelope = recordings.get_recordings(client, meeting_id)
             files = envelope.get("recording_files", []) or []
             if type_filter is not None:
@@ -1237,7 +1272,7 @@ def recordings_delete(meeting_id, file_id, action, yes, dry_run):
 
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             if file_id:
                 recordings.delete_recording_file(client, meeting_id, file_id, action=action)
             else:
@@ -1289,7 +1324,7 @@ def dashboard_meetings_list(type_, from_, to, page_size):
     """TSV: uuid\\tid\\ttopic\\thost\\tparticipants\\tduration\\tstart_time."""
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             click.echo("uuid\tid\ttopic\thost\tparticipants\tduration\tstart_time")
             for m in dashboard.list_meetings(
                 client,
@@ -1319,7 +1354,7 @@ def dashboard_meetings_get(meeting_id):
 
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             envelope = dashboard.get_meeting(client, meeting_id)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
@@ -1349,7 +1384,7 @@ def dashboard_meetings_participants(meeting_id, type_, page_size):
     """TSV: id\\tuser_id\\tuser_name\\tjoin_time\\tleave_time\\tduration."""
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             click.echo("id\tuser_id\tuser_name\tjoin_time\tleave_time\tduration")
             for p in dashboard.list_meeting_participants(
                 client, meeting_id, type=type_, page_size=page_size
@@ -1383,7 +1418,7 @@ def dashboard_zoomrooms_list(page_size):
     """TSV: id\\troom_name\\tstatus\\tdevice_ip\\tlast_start_time."""
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             click.echo("id\troom_name\tstatus\tdevice_ip\tlast_start_time")
             for r in dashboard.list_zoomrooms(client, page_size=page_size):
                 click.echo(
@@ -1408,7 +1443,7 @@ def dashboard_zoomrooms_get(room_id):
 
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             envelope = dashboard.get_zoomroom(client, room_id)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
@@ -1441,7 +1476,7 @@ def reports_daily(year, month):
 
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             envelope = reports.get_daily(client, year=year, month=month)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
@@ -1481,7 +1516,7 @@ def reports_meetings_list(user_id, from_, to, meeting_type, page_size):
     """TSV: uuid\\tid\\ttopic\\tuser_email\\tstart_time\\tduration\\tparticipants_count."""
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             click.echo("uuid\tid\ttopic\tuser_email\tstart_time\tduration\tparticipants_count")
             for m in reports.list_meetings_report(
                 client,
@@ -1520,7 +1555,7 @@ def reports_meetings_participants(meeting_id, page_size):
     """TSV: id\\tname\\tuser_email\\tjoin_time\\tleave_time\\tduration."""
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             click.echo("id\tname\tuser_email\tjoin_time\tleave_time\tduration")
             for p in reports.list_meeting_participants(client, meeting_id, page_size=page_size):
                 click.echo(
@@ -1558,7 +1593,7 @@ def reports_operationlogs_list(from_, to, category_type, page_size):
     """TSV: time\\toperator\\tcategory_type\\taction\\toperation_detail."""
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             click.echo("time\toperator\tcategory_type\taction\toperation_detail")
             for entry in reports.list_operation_logs(
                 client,
@@ -1613,7 +1648,7 @@ def chat_channels_list(user_id, page_size):
     """TSV: id\\tname\\ttype\\tchannel_settings.posting_permissions."""
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             click.echo("id\tname\ttype")
             for ch in chat.list_channels(client, user_id=user_id, page_size=page_size):
                 click.echo(f"{ch.get('id', '')}\t{ch.get('name', '')}\t{ch.get('type', '')}")
@@ -1657,7 +1692,7 @@ def chat_messages_send(message_text, to_channel, to_contact, user_id, reply_main
 
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             result = chat.send_message(
                 client,
                 message=message_text,
@@ -1700,7 +1735,7 @@ def phone_users_list(page_size):
     """TSV: id\\temail\\textension_number\\tstatus."""
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             click.echo("id\temail\textension_number\tstatus")
             for u in phone.list_phone_users(client, page_size=page_size):
                 click.echo(
@@ -1721,7 +1756,7 @@ def phone_users_get(user_id):
 
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             profile = phone.get_phone_user(client, user_id)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
@@ -1752,7 +1787,7 @@ def phone_call_logs_list(user_id, from_, to, page_size):
     """TSV: id\\tdirection\\tcaller_number\\tcallee_number\\tstart_time\\tduration."""
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             click.echo("id\tdirection\tcaller_number\tcallee_number\tstart_time\tduration")
             for entry in phone.list_call_logs(
                 client,
@@ -1790,7 +1825,7 @@ def phone_queues_list(page_size):
     """TSV: id\\tname\\textension_number\\tsite_name."""
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             click.echo("id\tname\textension_number\tsite_name")
             for q in phone.list_call_queues(client, page_size=page_size):
                 click.echo(
@@ -1827,7 +1862,7 @@ def phone_recordings_list(user_id, from_, to, page_size):
     """TSV: id\\tcaller_number\\tcallee_number\\tdate_time\\tduration."""
     creds = _load_creds_or_exit()
     try:
-        with ApiClient(creds) as client:
+        with _build_api_client(creds) as client:
             click.echo("id\tcaller_number\tcallee_number\tdate_time\tduration")
             for r in phone.list_phone_recordings(
                 client,
