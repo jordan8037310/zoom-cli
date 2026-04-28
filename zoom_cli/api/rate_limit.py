@@ -114,6 +114,9 @@ _TIER_RULES: list[tuple[str, re.Pattern[str], Tier]] = [
     ("GET", re.compile(r"/phone/call_logs"), Tier.MEDIUM),
     ("GET", re.compile(r"/phone/call_queues"), Tier.MEDIUM),
     ("GET", re.compile(r"/phone/recordings"), Tier.MEDIUM),
+    # ---- Zoom Team Chat (#19)
+    ("GET", re.compile(r"/chat/users/[^/]+/channels"), Tier.MEDIUM),
+    ("POST", re.compile(r"/chat/users/[^/]+/messages"), Tier.MEDIUM),
 ]
 
 #: Default tier for unmapped endpoints. MEDIUM matches Zoom's most-common
