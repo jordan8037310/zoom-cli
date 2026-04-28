@@ -26,7 +26,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Zoom Team Chat API (PR #62): closes #19. New `zoom chat channels list` and `zoom chat messages send` commands; `zoom_cli/api/chat.py`.
 > Zoom Reports API (PR #63): closes #20. New `zoom reports daily / meetings list / meetings participants / operationlogs list` commands; `zoom_cli/api/reports.py`; tier mappings extended for `/report/*` (HEAVY tier).
 > Zoom Dashboard API (PR #64): closes #21. New `zoom dashboard meetings list / get / participants` and `zoom dashboard zoomrooms list / get` commands; `zoom_cli/api/dashboard.py`; tier mappings extended for `/metrics/*` (HEAVY tier). Requires Business+ Zoom plan.
-> ApiClient user-OAuth integration (this branch): completes the user-OAuth story from #12. `ApiClient` now accepts either `S2SCredentials` or `UserOAuthCredentials`; the CLI prefers user-OAuth when both are configured.
+> ApiClient user-OAuth integration (PR #65): completes the user-OAuth story from #12. `ApiClient` now accepts either `S2SCredentials` or `UserOAuthCredentials`; the CLI prefers user-OAuth when both are configured.
+> Webhook timestamp-skew enforcement (this branch): closes the deferred replay-protection piece from #17. `MAX_TIMESTAMP_SKEW_SECONDS = 300` is now actually enforced — old / future-dated deliveries are rejected with 401 even if the signature verifies.
+
+### Added (post-#17 follow-up)
+- `webhook.is_timestamp_within_skew(timestamp_str, *, max_skew_seconds, now_ms)` — pure helper. Symmetric ±300s default window (rejects old replays AND future-dated spoofs); malformed / missing timestamps return False. Injectable `now_ms` for tests; defaults to `time.time() * 1000`.
+- `_make_handler(..., now_ms=None, max_skew_seconds=300)` — handler accepts injectable clock + skew so tests can pin time and bypass the wall clock.
+- Webhook handler now runs the timestamp-skew check **before** the signature check (parse failures and ancient timestamps are cheaper to reject than HMAC). All three rejection paths emit a stderr line for debugging.
+
+### Why this matters (security)
+Signature alone proves a `(body, timestamp)` pair was signed by someone with the secret — it does **not** prove the delivery is recent. Without timestamp enforcement, an attacker who captured an old signed delivery could replay it indefinitely. The ±300s window matches Zoom's documented tolerance.
 
 ### Added (post-#12 follow-up)
 - `ApiClient(credentials, ..., on_user_token_rotated=...)` — `credentials` now accepts either `S2SCredentials` or `UserOAuthCredentials`. For user-OAuth, every refresh rotates the persisted refresh_token (Zoom invalidates the old one immediately), and the optional callback fires with the new credentials so the caller can persist them.

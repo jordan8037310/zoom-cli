@@ -39,6 +39,7 @@ import hashlib
 import hmac
 import json
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
@@ -81,6 +82,36 @@ def verify_signature(
     return hmac.compare_digest(expected, signature)
 
 
+def is_timestamp_within_skew(
+    timestamp_str: str,
+    *,
+    max_skew_seconds: int = MAX_TIMESTAMP_SKEW_SECONDS,
+    now_ms: int | None = None,
+) -> bool:
+    """Return ``True`` if ``timestamp_str`` is within ``max_skew_seconds``
+    of the current wall clock (in either direction).
+
+    Zoom sends the timestamp as a millisecond Unix epoch string. Both
+    ancient timestamps (replay attacks) and far-future timestamps
+    (clock-skew or client-side spoofing) are rejected — symmetric
+    bounds keep the check simple and the failure mode obvious.
+
+    Malformed or missing timestamps return ``False`` (the handler
+    treats this as "rejected").
+
+    ``now_ms`` is injectable for tests; defaults to ``time.time() * 1000``.
+    """
+    if not timestamp_str:
+        return False
+    try:
+        ts_ms = int(timestamp_str)
+    except (TypeError, ValueError):
+        return False
+    current_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+    skew_ms = max_skew_seconds * 1000
+    return abs(current_ms - ts_ms) <= skew_ms
+
+
 def compute_url_validation_response(secret_token: str, plain_token: str) -> dict[str, str]:
     """Build the response body for Zoom's endpoint.url_validation handshake.
 
@@ -95,10 +126,22 @@ def compute_url_validation_response(secret_token: str, plain_token: str) -> dict
     return {"plainToken": plain_token, "encryptedToken": digest}
 
 
-def _make_handler(secret_token: str, *, sink=None):
+def _make_handler(
+    secret_token: str,
+    *,
+    sink=None,
+    now_ms: Any = None,
+    max_skew_seconds: int = MAX_TIMESTAMP_SKEW_SECONDS,
+):
     """Build a :class:`BaseHTTPRequestHandler` subclass closed over
     ``secret_token``. ``sink`` is a callable taking the parsed event dict
     (default: dump as one-line JSON to stdout); useful for tests.
+
+    ``now_ms`` is an optional callable returning the current epoch
+    milliseconds — used by the timestamp-skew check. Tests inject a
+    fixed value; production leaves it ``None`` (uses ``time.time()``).
+    ``max_skew_seconds`` overrides :data:`MAX_TIMESTAMP_SKEW_SECONDS`
+    for tests that want a tighter or looser bound.
     """
     if sink is None:
 
@@ -136,6 +179,26 @@ def _make_handler(secret_token: str, *, sink=None):
             if not signature or not timestamp:
                 self._respond(401, b'{"error":"missing signature headers"}')
                 sys.stderr.write("webhook: rejected — missing signature headers\n")
+                return
+
+            # Timestamp-skew check (replay protection): even with a
+            # valid signature, reject deliveries whose timestamp is
+            # outside the ±MAX_TIMESTAMP_SKEW_SECONDS window. The
+            # signature alone proves a body+timestamp pair was signed
+            # by someone with the secret; it does NOT prove the
+            # delivery is recent. An attacker who replays an old
+            # signed delivery would otherwise pass.
+            current_ms = now_ms() if callable(now_ms) else now_ms
+            if not is_timestamp_within_skew(
+                timestamp,
+                max_skew_seconds=max_skew_seconds,
+                now_ms=current_ms,
+            ):
+                self._respond(401, b'{"error":"timestamp outside acceptable skew"}')
+                sys.stderr.write(
+                    f"webhook: rejected — timestamp {timestamp!r} outside "
+                    f"±{max_skew_seconds}s skew window\n"
+                )
                 return
 
             if not verify_signature(secret_token, timestamp, body, signature):
