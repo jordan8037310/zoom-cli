@@ -23,7 +23,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Codegen tooling (PR #59): closes #22. New `scripts/codegen.py` wraps `datamodel-code-generator` for Pydantic v2 model generation from Zoom's OpenAPI spec. Optional `[codegen]` extra; output gitignored by default.
 > Webhook receiver (PR #60): closes #17. New `zoom webhook serve` command + `zoom_cli/api/webhook.py` with constant-time HMAC verification and the endpoint.url_validation handshake.
 > Zoom Phone API (PR #61): closes #18 (read-only piece). New `zoom phone users / call-logs / queues / recordings list/get` commands; `zoom_cli/api/phone.py`; tier mappings extended for `/phone/*` endpoints.
-> Zoom Team Chat API (this branch): closes #19. New `zoom chat channels list` and `zoom chat messages send` commands; `zoom_cli/api/chat.py`.
+> Zoom Team Chat API (PR #62): closes #19. New `zoom chat channels list` and `zoom chat messages send` commands; `zoom_cli/api/chat.py`.
+> Zoom Reports API (this branch): closes #20. New `zoom reports daily / meetings list / meetings participants / operationlogs list` commands; `zoom_cli/api/reports.py`; tier mappings extended for `/report/*` (HEAVY tier).
+
+### Added (issue #20)
+- `zoom_cli/api/reports.py` — `get_daily(client, *, year, month)`, `list_meetings_report(client, *, user_id, from_, to, meeting_type, page_size)`, `list_meeting_participants(client, meeting_id, *, page_size)`, `list_operation_logs(client, *, from_, to, category_type, page_size)`. All paginated except `get_daily` (Zoom returns the whole month). URL-encodes `meeting_id` (Zoom UUIDs sometimes contain `/` so this is needed for correctness, not just defense).
+- CLI:
+  - `zoom reports daily [--year] [--month]` — JSON dump.
+  - `zoom reports meetings list --from --to [--user-id] [--type past|pastOne|pastJoined] [--page-size]` — TSV per meeting.
+  - `zoom reports meetings participants <meeting-id> [--page-size]` — TSV per participant.
+  - `zoom reports operationlogs list --from --to [--category-type] [--page-size]` — TSV per log entry.
+- `rate_limit.ENDPOINT_TIERS` now classifies all `/report/*` paths as `Tier.HEAVY` (40/s + 60,000/day cap). Tests pin every endpoint plus a wildcard fallback so an unmapped reports path still ends up HEAVY rather than the MEDIUM default.
+
+### Note
+Reports are heavyweight — pass `RateLimiter()` to `ApiClient` for batch use to stay under the 60k/day cap; the `DailyCapExhaustedError` from PR #57 surfaces when you'd otherwise be silently blocked.
 
 ### Added (issue #19)
 - `zoom_cli/api/chat.py` — `list_channels(client, *, user_id="me", page_size=50)` paginates `GET /chat/users/<id>/channels` (Zoom caps this at 50 not 300); `send_message(client, *, message, to_channel | to_contact, user_id, reply_main_message_id)` posts to `/chat/users/<id>/messages` and validates that exactly one of `to_channel` / `to_contact` is set.
