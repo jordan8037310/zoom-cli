@@ -712,3 +712,40 @@ def test_stream_download_cleans_up_tempfile_on_partial(
     # And no .zoom-dl.* tempfile should be left in tmp_path.
     leftovers = list(tmp_path.glob(".zoom-dl.*"))
     assert leftovers == []
+
+
+# ---- #49: rate-limiter integration --------------------------------------
+
+
+def test_apiclient_default_has_no_rate_limiter() -> None:
+    """Default ApiClient is unlimited — same behaviour as before #49."""
+    c = ApiClient(_creds())
+    assert c._rate_limiter is None
+
+
+def test_apiclient_rate_limiter_acquires_before_send(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Closes #49 integration: the limiter is invoked with the request's
+    method + path on every send."""
+    from zoom_cli.api.rate_limit import RateLimiter, Tier
+
+    monkeypatch.setattr(oauth, "fetch_access_token", lambda *_a, **_k: _fresh_token())
+
+    captured: list[tuple[str, str]] = []
+
+    class _SpyLimiter(RateLimiter):
+        def acquire(self, method: str, path: str) -> Tier:
+            captured.append((method, path))
+            return Tier.LIGHT
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": "u-me"})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    with ApiClient(_creds(), http_client=http, rate_limiter=_SpyLimiter()) as c:
+        c.get("/users/me")
+
+    # ApiClient passes the full path (including /v2) to the limiter;
+    # tier_for() strips the version prefix before matching.
+    assert captured == [("GET", "/v2/users/me")]

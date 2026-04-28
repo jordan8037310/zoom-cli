@@ -37,6 +37,7 @@ from typing import Any
 import httpx
 
 from zoom_cli.api import oauth
+from zoom_cli.api.rate_limit import RateLimiter
 from zoom_cli.auth import S2SCredentials
 
 #: Zoom REST API base URL. All paths are relative to this.
@@ -131,11 +132,24 @@ class ApiClient:
         *,
         http_client: httpx.Client | None = None,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        rate_limiter: RateLimiter | None = None,
     ) -> None:
+        """Construct an ApiClient.
+
+        ``rate_limiter`` (closes #49): if set, ``acquire(method, url)`` is
+        called before every request to throttle against Zoom's per-tier
+        per-account limits. Default ``None`` = no proactive limiting; the
+        429/Retry-After backoff from #16 still catches reactive
+        throttling. Pass an instance for batch / long-running automation:
+
+            from zoom_cli.api.rate_limit import RateLimiter
+            client = ApiClient(creds, rate_limiter=RateLimiter())
+        """
         self._credentials = credentials
         self._owns_client = http_client is None
         self._http = http_client if http_client is not None else httpx.Client(timeout=timeout)
         self._cached_token: oauth.AccessToken | None = None
+        self._rate_limiter = rate_limiter
 
     # ---- context-manager hooks ---------------------------------------
 
@@ -180,6 +194,16 @@ class ApiClient:
         json: dict[str, Any] | None,
         force_refresh: bool = False,
     ) -> httpx.Response:
+        # Per-tier rate limiting (closes #49). Acquire BEFORE token
+        # fetch so a token refresh doesn't escape the limiter — Zoom's
+        # /oauth/token endpoint counts against the same per-account
+        # quotas. Path is parsed from the URL so endpoint classification
+        # works for both relative and absolute URLs.
+        if self._rate_limiter is not None:
+            from urllib.parse import urlsplit
+
+            path = urlsplit(url).path or url
+            self._rate_limiter.acquire(method, path)
         token = self._access_token(force_refresh=force_refresh)
         return self._http.request(
             method,

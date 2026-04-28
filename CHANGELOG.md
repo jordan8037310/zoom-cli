@@ -17,7 +17,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Users write surface (PR #53): closes #14 (write + settings-read piece). New `zoom users create / delete / settings get` commands.
 > Recordings surface (PR #54): closes #15. New `zoom recordings list / get / download / delete` commands; `zoom_cli/api/recordings.py`; `ApiClient.stream_download` for atomic streamed downloads.
 > User OAuth + PKCE (PR #55): closes #12. New `zoom auth login` 3-legged OAuth flow with loopback callback; `zoom_cli/api/user_oauth.py`; refresh-token storage in keyring service `zoom-cli-user-auth`; extended `auth status` and `auth logout` to cover both surfaces.
-> Schema versioning (this branch): closes #24 (final piece). `meetings.json` now wraps the meetings dict in a `{schema_version, meetings}` envelope; legacy v0 (pre-#24) files read transparently and migrate on first write.
+> Schema versioning (PR #56): closes #24 (final piece). `meetings.json` now wraps the meetings dict in a `{schema_version, meetings}` envelope; legacy v0 (pre-#24) files read transparently and migrate on first write.
+> Per-tier rate limiting (this branch): closes #49 (follow-up to #16's partial close). `zoom_cli/api/rate_limit.py` with token-bucket + daily counter + endpoint→tier classification; opt-in via `ApiClient(creds, rate_limiter=RateLimiter())`.
+
+### Added (issue #49)
+- `zoom_cli/api/rate_limit.py` — `Tier` enum (LIGHT/MEDIUM/HEAVY/RESOURCE_INTENSIVE) and `TIER_LIMITS` table pinned by tests against Zoom's published caps (80/60/40/20 per-second; HEAVY + RESOURCE_INTENSIVE additionally cap at 60,000/day). `TokenBucket` and `DailyCounter` primitives take injectable `clock` / `sleep` / `day_clock` for deterministic tests. `RateLimiter` composes the per-tier buckets and daily counters; `acquire(method, path)` blocks (or raises `DailyCapExhaustedError`) and returns the classified tier.
+- `tier_for(method, path)` — pinned regex table maps the endpoints currently in use; unmapped paths fall back to `Tier.MEDIUM`. Strips a leading `/v1`/`/v2`/etc. version prefix so callers can pass either relative or full paths.
+- `ApiClient` gains `rate_limiter: RateLimiter | None = None` constructor arg. Default `None` = no proactive limiting (existing behaviour unchanged; the 429/Retry-After backoff from #16 still catches reactive throttling). Pass an instance for batch / long-running automation:
+
+  ```python
+  from zoom_cli.api.rate_limit import RateLimiter
+  client = ApiClient(creds, rate_limiter=RateLimiter())
+  ```
 
 ### Added (issue #24, schema versioning piece)
 - `zoom_cli/utils.py` — `SCHEMA_VERSION = 1` constant; new `UnknownSchemaVersionError` for files written by a newer CLI; new `_detect_envelope()` helper that handles both v0 (flat dict at root) and v1 (wrapped envelope).
