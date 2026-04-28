@@ -135,13 +135,33 @@ def get_user_settings(client: ApiClient, user_id: str = "me") -> dict[str, Any]:
 
     The settings payload has ~50 fields across nested categories
     (``feature``, ``in_meeting``, ``email_notification``, etc.). The CLI
-    just dumps the JSON; callers wanting to mutate settings should use
-    :func:`update_user_settings` (or wait for a follow-up issue that
-    adds individual flags).
+    dumps the JSON; round-trip mutate via :func:`update_user_settings`
+    after editing the dump.
 
     Required scopes: ``user:read:settings`` or ``user:read:admin``.
     """
     return client.get(f"/users/{quote(user_id, safe='')}/settings")
+
+
+def update_user_settings(
+    client: ApiClient, user_id: str, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """``PATCH /users/{user_id}/settings`` — partial-update settings.
+
+    ``payload`` is the (sub-)dict to merge — Zoom's PATCH semantics
+    leave omitted fields untouched. Typical workflow:
+
+        # 1. Dump current settings to a JSON file
+        zoom users settings get me > settings.json
+        # 2. Edit settings.json
+        # 3. PATCH back
+        zoom users settings update me --from-json settings.json
+
+    Returns ``{}`` (Zoom responds with ``204 No Content``).
+
+    Required scopes: ``user:write:settings`` or ``user:write:admin``.
+    """
+    return client.patch(f"/users/{quote(user_id, safe='')}/settings", json=payload)
 
 
 def list_users(
