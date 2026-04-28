@@ -151,3 +151,95 @@ def test_save_rolls_back_to_empty_when_no_prior_state(monkeypatch: pytest.Monkey
 
     # No prior creds → rollback should delete what was written → load returns None.
     assert auth.load_s2s_credentials() is None
+
+
+# ---- user OAuth credential storage (closes #12 storage layer) ----------
+
+
+def _user_creds() -> auth.UserOAuthCredentials:
+    return auth.UserOAuthCredentials(refresh_token="rt-1", client_id="cid-A")
+
+
+def test_user_oauth_save_then_load_round_trips() -> None:
+    creds = _user_creds()
+    auth.save_user_oauth_credentials(creds)
+    assert auth.load_user_oauth_credentials() == creds
+
+
+def test_user_oauth_load_returns_none_when_nothing_saved() -> None:
+    assert auth.load_user_oauth_credentials() is None
+    assert auth.has_user_oauth_credentials() is False
+
+
+def test_user_oauth_clear_removes_all_keys() -> None:
+    auth.save_user_oauth_credentials(_user_creds())
+    auth.clear_user_oauth_credentials()
+    assert auth.load_user_oauth_credentials() is None
+    for key in ("user.refresh_token", "user.client_id"):
+        assert keyring.get_password(auth.SERVICE_NAME_USER, key) is None
+
+
+def test_user_oauth_clear_is_idempotent() -> None:
+    auth.clear_user_oauth_credentials()
+    auth.clear_user_oauth_credentials()
+
+
+def test_user_oauth_load_returns_none_when_only_partial() -> None:
+    """Both keys are required; presence of just one means 'not configured'."""
+    keyring.set_password(auth.SERVICE_NAME_USER, "user.refresh_token", "only-this")
+    assert auth.load_user_oauth_credentials() is None
+
+
+def test_user_oauth_has_swallows_no_keyring_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def boom(*_a, **_kw):
+        raise keyring.errors.NoKeyringError("no backend")
+
+    monkeypatch.setattr(keyring, "get_password", boom)
+    assert auth.has_user_oauth_credentials() is False
+
+
+def test_user_oauth_load_propagates_no_keyring_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same #41 policy as S2S: load_* propagates so the CLI can show a
+    distinct exit code; has_* swallows for probe-style use."""
+
+    def boom(*_a, **_kw):
+        raise keyring.errors.NoKeyringError("no backend")
+
+    monkeypatch.setattr(keyring, "get_password", boom)
+    with pytest.raises(keyring.errors.NoKeyringError):
+        auth.load_user_oauth_credentials()
+
+
+@pytest.mark.parametrize("fail_on_call", [1, 2])
+def test_user_oauth_save_rolls_back_on_partial_failure(
+    monkeypatch: pytest.MonkeyPatch, fail_on_call: int
+) -> None:
+    """Same #35 transactional pattern as S2S save."""
+    old = auth.UserOAuthCredentials(refresh_token="OLD-rt", client_id="OLD-cid")
+    auth.save_user_oauth_credentials(old)
+
+    new = auth.UserOAuthCredentials(refresh_token="NEW-rt", client_id="NEW-cid")
+    real_set = keyring.set_password
+    counter = {"calls": 0}
+
+    def flaky(service, username, password):
+        counter["calls"] += 1
+        if counter["calls"] == fail_on_call:
+            raise keyring.errors.KeyringError(f"sim fail call {fail_on_call}")
+        real_set(service, username, password)
+
+    monkeypatch.setattr(keyring, "set_password", flaky)
+    with pytest.raises(keyring.errors.KeyringError):
+        auth.save_user_oauth_credentials(new)
+
+    # Old creds intact after rollback.
+    assert auth.load_user_oauth_credentials() == old
+
+
+def test_user_service_name_pinned() -> None:
+    """Future rename would orphan every existing user's saved refresh."""
+    assert auth.SERVICE_NAME_USER == "zoom-cli-user-auth"

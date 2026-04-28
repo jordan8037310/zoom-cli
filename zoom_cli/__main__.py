@@ -8,7 +8,7 @@ import questionary
 from click_default_group import DefaultGroup
 
 from zoom_cli import auth
-from zoom_cli.api import meetings, oauth, recordings, users
+from zoom_cli.api import meetings, oauth, recordings, user_oauth, users
 from zoom_cli.api.client import ApiClient, ZoomApiError
 from zoom_cli.commands import (
     _edit,
@@ -300,24 +300,114 @@ def _now():
 def status():
     """``status`` deliberately does NOT use ``@_translate_keyring_errors``.
 
-    ``has_s2s_credentials`` swallows backend-missing errors itself and
-    reports "not configured", which is the right UX for a probe-style
+    ``has_*_credentials`` swallow backend-missing errors themselves and
+    report "not configured", which is the right UX for a probe-style
     command — you don't want a 'check status' to crash the script. Users
     debugging a missing backend should run ``zoom auth s2s test`` (which
     surfaces the backend error).
+
+    Reports both auth surfaces — S2S (account-wide) and User OAuth
+    (per-developer, closes #12).
     """
     if auth.has_s2s_credentials():
         click.echo("Server-to-Server OAuth: configured")
     else:
         click.echo("Server-to-Server OAuth: not configured")
-        click.echo("Run `zoom auth s2s set` to configure.")
+        click.echo("  Run `zoom auth s2s set` to configure.")
+
+    if auth.has_user_oauth_credentials():
+        click.echo("User OAuth (PKCE): configured")
+    else:
+        click.echo("User OAuth (PKCE): not configured")
+        click.echo("  Run `zoom auth login --client-id <id>` to configure.")
 
 
-@auth_cmd.command(help="Clear all stored API authentication credentials.")
+@auth_cmd.command(help="Clear ALL stored API authentication credentials (S2S + user OAuth).")
 @_translate_keyring_errors
 def logout():
     auth.clear_s2s_credentials()
+    auth.clear_user_oauth_credentials()
     click.echo("Cleared Server-to-Server OAuth credentials.")
+    click.echo("Cleared User OAuth credentials.")
+
+
+@auth_cmd.command(
+    "login",
+    help=(
+        "Authenticate as a Zoom user via OAuth 2.0 + PKCE (3-legged flow). "
+        "Opens the browser; captures the redirect on a loopback port; "
+        "exchanges the auth code for a refresh_token (stored in OS keyring)."
+    ),
+)
+@click.option(
+    "--client-id",
+    required=True,
+    envvar="ZOOM_USER_CLIENT_ID",
+    help="OAuth Client ID for a user-managed (not S2S) app. Picks up ZOOM_USER_CLIENT_ID env var.",
+)
+@click.option(
+    "--port",
+    type=click.IntRange(0, 65535),
+    default=0,
+    show_default=True,
+    help="Loopback port for the OAuth redirect. 0 = pick an ephemeral port.",
+)
+@click.option(
+    "--timeout",
+    type=click.IntRange(10, 1800),
+    default=300,
+    show_default=True,
+    help="Seconds to wait for the browser callback.",
+)
+@click.option(
+    "--no-browser",
+    is_flag=True,
+    default=False,
+    help="Don't try to open a browser; just print the auth URL for manual paste.",
+)
+@_translate_keyring_errors
+def auth_login(client_id, port, timeout, no_browser):
+    """Closes #12. Refresh token persists across CLI invocations; access
+    token (1-hour lifetime) lives only in memory and is re-minted via
+    refresh as needed."""
+
+    def _no_browser(_url):
+        # webbrowser.open returns bool; mimic that.
+        return False
+
+    browser = _no_browser if no_browser else None
+
+    def _print_url(url):
+        click.echo(f"Open this URL in a browser to authorize:\n  {url}")
+
+    try:
+        tokens = user_oauth.run_pkce_flow(
+            client_id,
+            port=port,
+            browser=browser,
+            timeout=float(timeout),
+            on_url=_print_url,
+        )
+    except user_oauth.ZoomUserAuthError as exc:
+        click.echo(f"OAuth failed: {exc}", err=True)
+        raise click.exceptions.Exit(code=1) from exc
+    except TimeoutError as exc:
+        click.echo(f"Timed out waiting for browser callback: {exc}", err=True)
+        raise click.exceptions.Exit(code=1) from exc
+    except httpx.HTTPError as exc:
+        click.echo(f"Could not reach Zoom OAuth endpoint: {exc}", err=True)
+        raise click.exceptions.Exit(code=1) from exc
+
+    auth.save_user_oauth_credentials(
+        auth.UserOAuthCredentials(
+            refresh_token=tokens.refresh_token,
+            client_id=client_id,
+        )
+    )
+    minutes = max(int((tokens.expires_at - _now()).total_seconds() // 60), 0)
+    click.echo(f"Logged in. Refresh token saved to keyring; access token expires in {minutes}m.")
+    if tokens.scopes:
+        click.echo(f"Scopes: {' '.join(tokens.scopes)}")
 
 
 # ---- Zoom Users REST API -------------------------------------------------
