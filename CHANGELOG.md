@@ -13,7 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Rate-limit + pagination (PR #48): closes #16 (partial — per-tier token bucket tracked at #49). 429/Retry-After backoff with jitter; `paginate()` generator helper; `users.list_users()` as the first paginated endpoint.
 > Users CLI surface (PR #50): closes #14 (read-only piece). New `zoom users list` and `zoom users get <user-id>` commands.
 > Meetings CLI surface (PR #51): closes #13 (read-only piece). New `zoom meetings list` and `zoom meetings get <meeting-id>` commands; `zoom_cli/api/meetings.py` mirrors the structure of `users.py`.
-> Meetings write surface (this branch): closes #13 (write piece). New `zoom meetings create / update / delete / end` commands. `ApiClient` gains `post`/`patch`/`put`/`delete` convenience wrappers.
+> Meetings write surface (PR #52): closes #13 (write piece). New `zoom meetings create / update / delete / end` commands. `ApiClient` gains `post`/`patch`/`put`/`delete` convenience wrappers.
+> Users write surface (this branch): closes #14 (write + settings-read piece). New `zoom users create / delete / settings get` commands.
+
+### Added (issue #14, write piece)
+- `zoom users create --email ... --type N [--first-name ...] [--last-name ...] [--display-name ...] [--password ...] [--action create|autoCreate|custCreate|ssoCreate]` — `POST /users`. Builds Zoom's `{action, user_info}` envelope from flat flags.
+- `zoom users delete <user-id> [--action disassociate|delete] [--transfer-email ...] [--transfer-meetings] [--transfer-recordings] [--transfer-webinars] [--yes] [--dry-run]` — `DELETE /users/<user-id>`. Always confirms unless `--yes` (deleting a user has high blast radius); the prompt phrasing is louder for `--action delete` ("Permanently delete ... cannot be undone") than for the default disassociate.
+- `zoom users settings get [user-id]` — `GET /users/<user-id>/settings`. Default user is `me`. Output is the raw JSON payload, pretty-printed; pipe through `jq` for filtering.
+- API helpers: `users.create_user(client, user_info, *, action="create")`, `users.delete_user(client, user_id, *, action, transfer_*)`, `users.get_user_settings(client, user_id="me")`. Constants `ALLOWED_CREATE_ACTIONS` and `ALLOWED_DELETE_ACTIONS` pinned by tests.
+
+### Deferred (issue #14 follow-up)
+- `zoom users settings update` — the settings payload has ~50 fields across nested categories; needs design before exposing as flags. Use `ApiClient.patch` directly until then.
 
 ### Added (issue #13, write piece)
 - `zoom meetings create --topic ... [--type] [--start-time] [--duration] [--timezone] [--password] [--agenda] [--user-id me]` — `POST /users/<user-id>/meetings`. Topic is required; everything else is optional. Recurrence + settings sub-objects are out of scope here (use the API directly until a follow-up adds flags).

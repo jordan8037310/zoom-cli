@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
 from zoom_cli.api import users
 
 
@@ -99,3 +100,139 @@ def test_list_users_passes_status_filter() -> None:
 
     params = fake_client.get.call_args_list[0][1]["params"]
     assert params["status"] == "pending"
+
+
+# ---- write surface (closes #14 write piece) -----------------------------
+
+
+def test_create_user_wraps_payload_with_action_and_user_info() -> None:
+    fake_client = MagicMock()
+    fake_client.post.return_value = {"id": "new-user", "email": "alice@example.com"}
+
+    result = users.create_user(fake_client, {"email": "alice@example.com", "type": 2})
+
+    fake_client.post.assert_called_once_with(
+        "/users",
+        json={"action": "create", "user_info": {"email": "alice@example.com", "type": 2}},
+    )
+    assert result == {"id": "new-user", "email": "alice@example.com"}
+
+
+def test_create_user_forwards_action() -> None:
+    fake_client = MagicMock()
+    fake_client.post.return_value = {}
+
+    users.create_user(fake_client, {"email": "x@y", "type": 1}, action="autoCreate")
+
+    body = fake_client.post.call_args[1]["json"]
+    assert body["action"] == "autoCreate"
+
+
+def test_create_user_rejects_unknown_action() -> None:
+    fake_client = MagicMock()
+    with pytest.raises(ValueError, match="action"):
+        users.create_user(fake_client, {"email": "x@y", "type": 1}, action="bogus")
+
+
+def test_delete_user_default_disassociates() -> None:
+    fake_client = MagicMock()
+    fake_client.delete.return_value = {}
+
+    users.delete_user(fake_client, "u-123")
+
+    fake_client.delete.assert_called_once_with("/users/u-123", params={"action": "disassociate"})
+
+
+def test_delete_user_permanent_action() -> None:
+    fake_client = MagicMock()
+    fake_client.delete.return_value = {}
+
+    users.delete_user(fake_client, "u-123", action="delete")
+
+    assert fake_client.delete.call_args[1]["params"]["action"] == "delete"
+
+
+def test_delete_user_rejects_unknown_action() -> None:
+    fake_client = MagicMock()
+    with pytest.raises(ValueError, match="action"):
+        users.delete_user(fake_client, "u-1", action="bogus")
+
+
+def test_delete_user_attaches_transfer_params_when_email_set() -> None:
+    fake_client = MagicMock()
+    fake_client.delete.return_value = {}
+
+    users.delete_user(
+        fake_client,
+        "u-leaving",
+        transfer_email="successor@example.com",
+        transfer_meeting=True,
+        transfer_recording=False,
+        transfer_webinar=True,
+    )
+
+    params = fake_client.delete.call_args[1]["params"]
+    assert params["transfer_email"] == "successor@example.com"
+    assert params["transfer_meeting"] == "true"
+    assert params["transfer_recording"] == "false"
+    assert params["transfer_webinar"] == "true"
+
+
+def test_delete_user_omits_transfer_params_without_email() -> None:
+    """Transfer flags are no-ops without --transfer-email; don't send them."""
+    fake_client = MagicMock()
+    fake_client.delete.return_value = {}
+
+    users.delete_user(fake_client, "u-123", transfer_meeting=True)
+
+    params = fake_client.delete.call_args[1]["params"]
+    assert "transfer_email" not in params
+    assert "transfer_meeting" not in params
+
+
+def test_delete_user_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.delete.return_value = {}
+
+    users.delete_user(fake_client, "alice@example.com")
+
+    arg = fake_client.delete.call_args[0][0]
+    assert arg == "/users/alice%40example.com"
+
+
+def test_get_user_settings_default_me() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {"feature": {}, "in_meeting": {}}
+
+    users.get_user_settings(fake_client)
+
+    fake_client.get.assert_called_once_with("/users/me/settings")
+
+
+def test_get_user_settings_specific_user() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {}
+
+    users.get_user_settings(fake_client, "u-42")
+
+    fake_client.get.assert_called_once_with("/users/u-42/settings")
+
+
+def test_get_user_settings_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {}
+
+    users.get_user_settings(fake_client, "alice@example.com")
+
+    assert fake_client.get.call_args[0][0] == "/users/alice%40example.com/settings"
+
+
+def test_allowed_create_actions_pinned() -> None:
+    assert "create" in users.ALLOWED_CREATE_ACTIONS
+    assert "autoCreate" in users.ALLOWED_CREATE_ACTIONS
+    assert "custCreate" in users.ALLOWED_CREATE_ACTIONS
+    assert "ssoCreate" in users.ALLOWED_CREATE_ACTIONS
+
+
+def test_allowed_delete_actions_pinned() -> None:
+    assert users.ALLOWED_DELETE_ACTIONS == ("disassociate", "delete")

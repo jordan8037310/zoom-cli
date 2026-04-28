@@ -58,6 +58,92 @@ def get_me(client: ApiClient) -> dict[str, Any]:
     return get_user(client, "me")
 
 
+#: Allowed values for ``zoom users create --action``. Mirrors Zoom's
+#: ``action`` field on POST /users. ``create`` (default) sends an
+#: invite; ``autoCreate`` provisions with a password; ``custCreate``
+#: is for custom-auth managed users; ``ssoCreate`` is for SSO-managed
+#: users.
+ALLOWED_CREATE_ACTIONS: tuple[str, ...] = (
+    "create",
+    "autoCreate",
+    "custCreate",
+    "ssoCreate",
+)
+
+#: Allowed values for ``zoom users delete --action``. ``disassociate``
+#: removes the user from this account but keeps their data and Zoom
+#: identity. ``delete`` permanently removes them.
+ALLOWED_DELETE_ACTIONS: tuple[str, ...] = ("disassociate", "delete")
+
+
+def create_user(
+    client: ApiClient,
+    user_info: dict[str, Any],
+    *,
+    action: str = "create",
+) -> dict[str, Any]:
+    """``POST /users`` — create a user.
+
+    Zoom expects ``{"action": "...", "user_info": {...}}``; this helper
+    builds that envelope so callers can pass a flat ``user_info`` dict.
+
+    Required scopes: ``user:write:admin``.
+    """
+    if action not in ALLOWED_CREATE_ACTIONS:
+        raise ValueError(f"action must be one of {ALLOWED_CREATE_ACTIONS!r}, got {action!r}")
+    return client.post("/users", json={"action": action, "user_info": user_info})
+
+
+def delete_user(
+    client: ApiClient,
+    user_id: str,
+    *,
+    action: str = "disassociate",
+    transfer_email: str | None = None,
+    transfer_meeting: bool = False,
+    transfer_recording: bool = False,
+    transfer_webinar: bool = False,
+) -> dict[str, Any]:
+    """``DELETE /users/{user_id}`` — remove a user from the account.
+
+    Args:
+        action: ``disassociate`` (default; remove from account, keep
+            user identity) or ``delete`` (permanent, irreversible).
+        transfer_email: If set, transfer the user's content to this
+            other user's account before deletion.
+        transfer_meeting / transfer_recording / transfer_webinar:
+            Which content kinds to transfer. Only meaningful when
+            ``transfer_email`` is set; ignored otherwise.
+
+    Returns ``{}`` (Zoom responds with ``204 No Content``).
+
+    Required scopes: ``user:write:admin``.
+    """
+    if action not in ALLOWED_DELETE_ACTIONS:
+        raise ValueError(f"action must be one of {ALLOWED_DELETE_ACTIONS!r}, got {action!r}")
+    params: dict[str, Any] = {"action": action}
+    if transfer_email:
+        params["transfer_email"] = transfer_email
+        params["transfer_meeting"] = "true" if transfer_meeting else "false"
+        params["transfer_recording"] = "true" if transfer_recording else "false"
+        params["transfer_webinar"] = "true" if transfer_webinar else "false"
+    return client.delete(f"/users/{quote(user_id, safe='')}", params=params)
+
+
+def get_user_settings(client: ApiClient, user_id: str = "me") -> dict[str, Any]:
+    """``GET /users/{user_id}/settings`` — return the user's settings.
+
+    The settings payload has ~50 fields across nested categories
+    (``feature``, ``in_meeting``, ``email_notification``, etc.). The CLI
+    just dumps the JSON; callers wanting to mutate settings should use
+    :func:`update_user_settings` (or wait for a follow-up issue that
+    adds individual flags).
+
+    Required scopes: ``user:read:settings`` or ``user:read:admin``.
+    """
+    return client.get(f"/users/{quote(user_id, safe='')}/settings")
+
+
 def list_users(
     client: ApiClient,
     *,
