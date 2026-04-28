@@ -178,3 +178,129 @@ def test_default_output_dir_pinned() -> None:
     """A move would silently break collaborators' git status / .gitignore."""
     codegen = _load_codegen()
     assert Path("zoom_cli/api/_generated") == codegen.DEFAULT_OUTPUT_DIR
+
+
+# ---- --from-url mode ----------------------------------------------------
+
+
+def test_main_requires_spec_or_url(capsys: pytest.CaptureFixture) -> None:
+    """argparse mutually-exclusive required group enforces this."""
+    codegen = _load_codegen()
+    with pytest.raises(SystemExit) as excinfo:
+        codegen.main([])  # neither positional spec nor --from-url
+    assert excinfo.value.code == 2  # argparse error exit
+    err = capsys.readouterr().err
+    assert "required" in err.lower() or "one of" in err.lower()
+
+
+def test_main_rejects_both_spec_and_url(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    """Mutually exclusive — passing both should error."""
+    codegen = _load_codegen()
+    spec = tmp_path / "spec.json"
+    spec.write_text("{}")
+    with pytest.raises(SystemExit) as excinfo:
+        codegen.main([str(spec), "--from-url", "https://example.com/spec.json"])
+    assert excinfo.value.code == 2
+
+
+def test_main_from_url_fetches_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """--from-url calls _fetch_spec_to_tempfile and feeds the result to
+    the codegen invocation."""
+    codegen = _load_codegen()
+
+    fetched_url = {"url": None}
+    fake_path = tmp_path / "fetched.json"
+    fake_path.write_text("{}")
+
+    def fake_fetch(url: str) -> Path:
+        fetched_url["url"] = url
+        return fake_path
+
+    monkeypatch.setattr(codegen, "_fetch_spec_to_tempfile", fake_fetch)
+
+    captured_cmd: list = []
+
+    def fake_run(cmd, check=False):
+        captured_cmd.extend(cmd)
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr(codegen.shutil, "which", lambda _cmd: "/path/datamodel-codegen")
+    monkeypatch.setattr(codegen.subprocess, "run", fake_run)
+
+    rc = codegen.main(
+        [
+            "--from-url",
+            "https://developers.zoom.us/openapi-spec/api.json",
+            "--output-dir",
+            str(tmp_path / "out"),
+        ]
+    )
+    assert rc == 0
+    assert fetched_url["url"] == "https://developers.zoom.us/openapi-spec/api.json"
+    # The fetched tempfile path should appear in the codegen invocation.
+    assert str(fake_path) in captured_cmd
+    out = capsys.readouterr().out
+    assert "Fetched spec from" in out
+
+
+def test_main_from_url_propagates_fetch_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Network failure during fetch → exit 1 with a clear message."""
+    codegen = _load_codegen()
+
+    def boom(_url: str) -> Path:
+        raise RuntimeError("simulated DNS failure")
+
+    monkeypatch.setattr(codegen, "_fetch_spec_to_tempfile", boom)
+    rc = codegen.main(
+        [
+            "--from-url",
+            "https://example.com/spec.json",
+            "--output-dir",
+            str(tmp_path / "out"),
+        ]
+    )
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "failed to fetch spec" in err
+    assert "simulated DNS failure" in err
+
+
+def test_fetch_spec_to_tempfile_writes_response_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end smoke of the helper using httpx.MockTransport.
+
+    The helper does ``import httpx`` lazily inside, so patching
+    ``httpx.Client`` on the real httpx module is what the function
+    picks up at call time.
+    """
+    import httpx
+
+    codegen = _load_codegen()
+
+    body = b'{"openapi":"3.0.0","info":{"title":"Test"}}'
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body)
+
+    real_client = httpx.Client
+
+    class _Mocked(real_client):
+        def __init__(self, *_a, **_kw):
+            super().__init__(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(httpx, "Client", _Mocked)
+
+    path = codegen._fetch_spec_to_tempfile("https://example.com/spec.json")
+    try:
+        assert path.read_bytes() == body
+    finally:
+        path.unlink()
