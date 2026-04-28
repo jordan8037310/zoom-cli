@@ -107,16 +107,28 @@ def _free_port() -> int:
         s.close()
 
 
+#: Fixed pinned-time used by the webhook_server fixture so signed-event
+#: tests don't have to compute "now" each run. Choose any value within
+#: the skew window when generating test signatures.
+PINNED_NOW_MS = 1_745_000_000_000  # ~2025-04-18T15:33:20Z
+
+
 @pytest.fixture
 def webhook_server():
     """Spin up a real ``HTTPServer`` on an ephemeral loopback port and
-    yield (port, captured_events) for the test. Server thread is shut
-    down on teardown."""
+    yield (port, captured_events) for the test. The handler's clock is
+    pinned to :data:`PINNED_NOW_MS` so tests can use a fixed timestamp
+    that always sits inside the skew window, regardless of when CI runs.
+    Server thread is shut down on teardown."""
     from http.server import HTTPServer
 
     captured: list[dict] = []
     secret = "test-secret"
-    handler_cls = webhook._make_handler(secret, sink=captured.append)
+    handler_cls = webhook._make_handler(
+        secret,
+        sink=captured.append,
+        now_ms=lambda: PINNED_NOW_MS,
+    )
 
     port = _free_port()
     server = HTTPServer(("127.0.0.1", port), handler_cls)
@@ -164,7 +176,8 @@ def test_handler_responds_to_url_validation_handshake(webhook_server) -> None:
 def test_handler_accepts_valid_signed_event(webhook_server) -> None:
     secret, port, captured = webhook_server
     body = json.dumps({"event": "meeting.started", "payload": {"foo": "bar"}}).encode()
-    timestamp = "1660157595650"
+    # Inside the skew window relative to PINNED_NOW_MS.
+    timestamp = str(PINNED_NOW_MS)
     sig = webhook.compute_signature(secret, timestamp, body)
 
     status, _ = _post(
@@ -181,11 +194,13 @@ def test_handler_accepts_valid_signed_event(webhook_server) -> None:
 def test_handler_rejects_invalid_signature(webhook_server) -> None:
     _secret, port, captured = webhook_server
     body = b'{"event":"meeting.started","payload":{}}'
+    # Pass a timestamp inside the skew window so we exercise the
+    # signature-rejection path, not the timestamp-rejection path.
     status, response = _post(
         port,
         body,
         headers={
-            "X-Zm-Request-Timestamp": "1234",
+            "X-Zm-Request-Timestamp": str(PINNED_NOW_MS),
             "X-Zm-Signature": "v0=" + "0" * 64,  # wrong hex
         },
     )
@@ -216,10 +231,11 @@ def test_handler_rejects_invalid_json_body(webhook_server) -> None:
 def test_handler_rejects_tampered_body_after_signature(webhook_server) -> None:
     """Sign one body, send a different one — must be rejected. Pins the
     integrity guarantee against a man-in-the-middle who changes the body
-    in flight."""
+    in flight. Uses a timestamp inside the skew window so we exercise
+    the signature-mismatch path, not timestamp rejection."""
     secret, port, captured = webhook_server
     original = b'{"event":"meeting.started","payload":{"foo":"bar"}}'
-    timestamp = "1234"
+    timestamp = str(PINNED_NOW_MS)
     sig = webhook.compute_signature(secret, timestamp, original)
 
     # Send a different body with the original signature.
@@ -232,3 +248,110 @@ def test_handler_rejects_tampered_body_after_signature(webhook_server) -> None:
 
     assert status == 401
     assert captured == []
+
+
+# ---- timestamp skew enforcement (replay protection) ---------------------
+
+
+def test_is_timestamp_within_skew_accepts_now() -> None:
+    """A timestamp matching `now_ms` exactly is in-window."""
+    now = 1_745_000_000_000
+    assert webhook.is_timestamp_within_skew(str(now), now_ms=now) is True
+
+
+def test_is_timestamp_within_skew_accepts_inside_window() -> None:
+    """Both directions: 100s past, 100s future — both inside ±300s."""
+    now = 1_745_000_000_000
+    past = now - 100_000  # 100s ago
+    future = now + 100_000  # 100s in the future
+    assert webhook.is_timestamp_within_skew(str(past), now_ms=now) is True
+    assert webhook.is_timestamp_within_skew(str(future), now_ms=now) is True
+
+
+def test_is_timestamp_within_skew_rejects_old_outside_window() -> None:
+    """A timestamp 5 minutes + 1s old is outside the default ±300s window."""
+    now = 1_745_000_000_000
+    too_old = now - (301 * 1000)
+    assert webhook.is_timestamp_within_skew(str(too_old), now_ms=now) is False
+
+
+def test_is_timestamp_within_skew_rejects_future_outside_window() -> None:
+    """Symmetric upper bound — protects against client clock-spoofing too."""
+    now = 1_745_000_000_000
+    too_future = now + (301 * 1000)
+    assert webhook.is_timestamp_within_skew(str(too_future), now_ms=now) is False
+
+
+def test_is_timestamp_within_skew_rejects_malformed() -> None:
+    now = 1_745_000_000_000
+    assert webhook.is_timestamp_within_skew("not a number", now_ms=now) is False
+    assert webhook.is_timestamp_within_skew("", now_ms=now) is False
+    assert webhook.is_timestamp_within_skew("12.34.56", now_ms=now) is False
+
+
+def test_is_timestamp_within_skew_respects_max_skew_seconds() -> None:
+    """Caller can tighten or loosen the bound for tests / specific apps."""
+    now = 1_745_000_000_000
+    ts = str(now - 60_000)  # 60s old
+    assert webhook.is_timestamp_within_skew(ts, max_skew_seconds=30, now_ms=now) is False
+    assert webhook.is_timestamp_within_skew(ts, max_skew_seconds=120, now_ms=now) is True
+
+
+def test_handler_rejects_replayed_old_timestamp(webhook_server) -> None:
+    """Even with a perfectly valid signature, a stale timestamp is
+    rejected — closes the replay-attack window beyond what the
+    signature alone protects against."""
+    secret, port, captured = webhook_server
+    body = b'{"event":"meeting.started","payload":{}}'
+    # 10 minutes before PINNED_NOW_MS = way outside ±300s.
+    old_timestamp = str(PINNED_NOW_MS - 600_000)
+    sig = webhook.compute_signature(secret, old_timestamp, body)
+
+    status, response = _post(
+        port,
+        body,
+        headers={"X-Zm-Request-Timestamp": old_timestamp, "X-Zm-Signature": sig},
+    )
+
+    assert status == 401
+    assert b"timestamp outside acceptable skew" in response
+    assert captured == []  # sink never invoked on rejected events
+
+
+def test_handler_rejects_future_timestamp(webhook_server) -> None:
+    """Symmetric upper bound: a timestamp in the future is rejected too,
+    so a misconfigured / spoofed client can't pre-date deliveries to
+    bypass detection."""
+    secret, port, _captured = webhook_server
+    body = b'{"event":"meeting.started","payload":{}}'
+    future_timestamp = str(PINNED_NOW_MS + 600_000)  # 10 minutes future
+    sig = webhook.compute_signature(secret, future_timestamp, body)
+
+    status, response = _post(
+        port,
+        body,
+        headers={"X-Zm-Request-Timestamp": future_timestamp, "X-Zm-Signature": sig},
+    )
+
+    assert status == 401
+    assert b"timestamp outside acceptable skew" in response
+
+
+def test_handler_rejects_malformed_timestamp(webhook_server) -> None:
+    secret, port, _captured = webhook_server
+    body = b'{"event":"meeting.started","payload":{}}'
+    # Sign with a junk timestamp; even though signature would verify,
+    # the timestamp parse fails and we reject before signature check.
+    sig = webhook.compute_signature(secret, "not-a-timestamp", body)
+
+    status, response = _post(
+        port,
+        body,
+        headers={
+            "X-Zm-Request-Timestamp": "not-a-timestamp",
+            "X-Zm-Signature": sig,
+        },
+    )
+
+    assert status == 401
+    assert b"timestamp outside acceptable skew" in response
