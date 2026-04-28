@@ -258,3 +258,42 @@ class ApiClient:
     def get(self, path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """Convenience wrapper for ``GET``."""
         return self.request("GET", path, params=params)
+
+    def post(
+        self,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Convenience wrapper for ``POST`` with a JSON body."""
+        return self.request("POST", path, params=params, json=json)
+
+    def patch(
+        self,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Convenience wrapper for ``PATCH`` with a JSON body.
+
+        Most Zoom partial-update endpoints respond with ``204 No Content``
+        (returns ``{}`` from :meth:`request`).
+        """
+        return self.request("PATCH", path, params=params, json=json)
+
+    def put(
+        self,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Convenience wrapper for ``PUT`` with a JSON body."""
+        return self.request("PUT", path, params=params, json=json)
+
+    def delete(self, path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Convenience wrapper for ``DELETE``. Most Zoom delete endpoints
+        respond with ``204 No Content`` (returns ``{}``)."""
+        return self.request("DELETE", path, params=params)
