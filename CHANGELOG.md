@@ -28,7 +28,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Zoom Dashboard API (PR #64): closes #21. New `zoom dashboard meetings list / get / participants` and `zoom dashboard zoomrooms list / get` commands; `zoom_cli/api/dashboard.py`; tier mappings extended for `/metrics/*` (HEAVY tier). Requires Business+ Zoom plan.
 > ApiClient user-OAuth integration (PR #65): completes the user-OAuth story from #12. `ApiClient` now accepts either `S2SCredentials` or `UserOAuthCredentials`; the CLI prefers user-OAuth when both are configured.
 > Webhook timestamp-skew enforcement (PR #66): closes the deferred replay-protection piece from #17. `MAX_TIMESTAMP_SKEW_SECONDS = 300` is now actually enforced — old / future-dated deliveries are rejected with 401 even if the signature verifies.
-> Phone call recording downloads (this branch): closes the deferred download piece from #18. New `zoom phone recordings download <recording-id>` chains `get_phone_recording` (for the URL) with `ApiClient.stream_download` (atomic write).
+> Phone call recording downloads (PR #67): closes the deferred download piece from #18. New `zoom phone recordings download <recording-id>` chains `get_phone_recording` (for the URL) with `ApiClient.stream_download` (atomic write).
+> PyPI release workflow (this branch): closes the PyPI half of #10. New `.github/workflows/release.yml` builds + publishes on tag push via PyPI Trusted Publishing (OIDC, no token in secrets).
+
+### Added (issue #10, PyPI half)
+- `.github/workflows/release.yml` — three-stage workflow:
+  1. Build sdist + wheel via `python -m build`.
+  2. Verify by installing the wheel into a fresh interpreter and importing `zoom_cli`.
+  3. Publish to PyPI via the official `pypa/gh-action-pypi-publish@release/v1` action using **Trusted Publishing (OIDC)** — no `PYPI_API_TOKEN` secret needed.
+- Triggers on `git push` to a `v*` tag, **and** on manual `workflow_dispatch` (with a `dry_run` checkbox that skips the upload step — handy for verifying the build before the first real release).
+- README "Releases" section documents the one-time PyPI Trusted Publisher setup.
+
+### One-time setup (action required to actually publish)
+The workflow lands inert. To activate publishes, on PyPI:
+1. Create the `zoom-cli` project (or claim it).
+2. PyPI → project Settings → Publishing → Add Trusted Publisher with `Owner=jordan8037310`, `Repo=zoom-cli`, `Workflow=release.yml`, `Environment=pypi`.
+3. Tag a release: `git tag vX.Y.Z && git push --tags`.
 
 ### Added (post-#18 follow-up)
 - `phone.get_phone_recording(client, recording_id)` — `GET /phone/recordings/<id>`. Returns the single recording's metadata including `download_url` and `file_extension`. URL-encodes the path segment.
