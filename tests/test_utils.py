@@ -41,7 +41,7 @@ def test_get_meeting_names_sorted(write_meetings) -> None:
 def test_write_to_meeting_file_round_trips(tmp_zoom_cli_home: Path) -> None:
     payload = {"team": {"id": "999", "password": "secret"}}
     utils_mod.write_to_meeting_file(payload)
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert on_disk == payload
 
 
@@ -241,7 +241,7 @@ def test_write_to_meeting_file_actually_calls_os_replace(
     assert os.path.dirname(src) == os.path.dirname(dst)
     assert os.path.basename(src).startswith(".meetings.")
 
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert on_disk == payload
 
     leftovers = [p for p in tmp_zoom_cli_home.iterdir() if p.name != "meetings.json"]
@@ -252,9 +252,12 @@ def test_write_to_meeting_file_cleans_up_when_replace_fails(
     tmp_zoom_cli_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """If ``os.replace`` raises, the original file must remain intact and
-    the tempfile must be cleaned up."""
+    the tempfile must be cleaned up.
+
+    Pre-seeds with the v1 envelope (closes #24) so the post-failure read
+    matches the schema we write."""
     target = tmp_zoom_cli_home / "meetings.json"
-    target.write_text('{"original": {"id": "999"}}')
+    target.write_text('{"schema_version": 1, "meetings": {"original": {"id": "999"}}}')
 
     def boom(*_args, **_kwargs):
         raise OSError("simulated replace failure")
@@ -264,7 +267,7 @@ def test_write_to_meeting_file_cleans_up_when_replace_fails(
     with pytest.raises(OSError, match="simulated replace failure"):
         utils_mod.write_to_meeting_file({"new": {"id": "111"}})
 
-    on_disk = json.loads(target.read_text())
+    on_disk = json.loads(target.read_text())["meetings"]
     assert on_disk == {"original": {"id": "999"}}
 
     leftovers = [p for p in tmp_zoom_cli_home.iterdir() if p.name != "meetings.json"]
@@ -279,7 +282,7 @@ def test_write_to_meeting_file_cleans_up_when_fsync_fails(
     original meetings.json must remain intact. Covers the asymmetric path
     flagged in code review (codex + python-review on PR #27)."""
     target = tmp_zoom_cli_home / "meetings.json"
-    target.write_text('{"original": {"id": "999"}}')
+    target.write_text('{"schema_version": 1, "meetings": {"original": {"id": "999"}}}')
 
     real_fsync = utils_mod.os.fsync
 
@@ -297,7 +300,7 @@ def test_write_to_meeting_file_cleans_up_when_fsync_fails(
     # Restore for any subsequent fixtures
     monkeypatch.setattr(utils_mod.os, "fsync", real_fsync)
 
-    on_disk = json.loads(target.read_text())
+    on_disk = json.loads(target.read_text())["meetings"]
     assert on_disk == {"original": {"id": "999"}}
 
     leftovers = [p for p in tmp_zoom_cli_home.iterdir() if p.name != "meetings.json"]
@@ -310,7 +313,7 @@ def test_write_to_meeting_file_round_trips_unicode(tmp_zoom_cli_home: Path) -> N
     back, so the round-trip is lossless."""
     payload = {"meeting-with-emoji-🚀": {"password": "p@ss-Ω"}}
     utils_mod.write_to_meeting_file(payload)
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert on_disk == payload
 
 
@@ -472,7 +475,7 @@ def test_ensure_storage_tightens_existing_permissive_dir(
 def test_meeting_file_transaction_persists_changes(tmp_zoom_cli_home: Path) -> None:
     with utils_mod.meeting_file_transaction() as contents:
         contents["new"] = {"id": "1"}
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert on_disk == {"new": {"id": "1"}}
 
 
@@ -502,6 +505,102 @@ def test_meeting_file_transaction_lock_serializes_concurrent_writes(
     t1.join()
     t2.join()
 
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert "alpha" in on_disk
     assert "beta" in on_disk
+
+
+# ---- #24 schema versioning ----------------------------------------------
+
+
+def test_schema_version_constant_is_pinned() -> None:
+    """A bump should be a deliberate, reviewed change."""
+    assert utils_mod.SCHEMA_VERSION == 1
+
+
+def test_write_emits_v1_envelope(tmp_zoom_cli_home: Path) -> None:
+    utils_mod.write_to_meeting_file({"team": {"id": "1"}})
+    raw = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    assert raw == {"schema_version": 1, "meetings": {"team": {"id": "1"}}}
+
+
+def test_read_legacy_v0_returns_flat_meetings(tmp_zoom_cli_home: Path) -> None:
+    """A pre-#24 file (no schema_version, flat name→entry at root) must
+    still be readable for back-compat with existing installs."""
+    legacy = '{"team": {"id": "1"}, "standup": {"url": "https://zoom.us/j/2"}}'
+    (tmp_zoom_cli_home / "meetings.json").write_text(legacy)
+
+    result = utils_mod.get_meeting_file_contents()
+
+    assert result == {"team": {"id": "1"}, "standup": {"url": "https://zoom.us/j/2"}}
+
+
+def test_read_legacy_v0_does_not_rewrite_file(tmp_zoom_cli_home: Path) -> None:
+    """A pure read should NOT migrate the file format on disk — that
+    would surprise users who are just inspecting state."""
+    target = tmp_zoom_cli_home / "meetings.json"
+    legacy = '{"team": {"id": "1"}}'
+    target.write_text(legacy)
+
+    utils_mod.get_meeting_file_contents()
+
+    assert target.read_text() == legacy
+
+
+def test_first_write_after_v0_migrates_to_v1(tmp_zoom_cli_home: Path) -> None:
+    """The migration is opportunistic: only the first write after upgrade
+    converts the file to v1."""
+    target = tmp_zoom_cli_home / "meetings.json"
+    target.write_text('{"team": {"id": "1"}}')
+
+    # Read returns the legacy contents; emit them back via write to migrate.
+    contents = utils_mod.get_meeting_file_contents()
+    utils_mod.write_to_meeting_file(contents)
+
+    raw = json.loads(target.read_text())
+    assert raw == {"schema_version": 1, "meetings": {"team": {"id": "1"}}}
+
+
+def test_read_future_version_raises(tmp_zoom_cli_home: Path) -> None:
+    """A v9999 file (written by some future CLI) must surface a clear
+    error, not silently lose data by assuming an empty meetings dict."""
+    future = '{"schema_version": 9999, "meetings": {"team": {"id": "1"}, "future_field": "data"}}'
+    (tmp_zoom_cli_home / "meetings.json").write_text(future)
+
+    with pytest.raises(utils_mod.UnknownSchemaVersionError) as excinfo:
+        utils_mod.get_meeting_file_contents()
+    assert excinfo.value.found_version == 9999
+    # Message tells the user how to recover.
+    assert "Upgrade zoom-cli" in str(excinfo.value)
+
+
+def test_read_corrupt_envelope_returns_empty(tmp_zoom_cli_home: Path) -> None:
+    """A v1-envelope-shaped file with non-dict 'meetings' is corrupt;
+    return empty rather than crash. Explicit policy: don't try to
+    repair, just fail-soft so the user can re-save."""
+    (tmp_zoom_cli_home / "meetings.json").write_text(
+        '{"schema_version": 1, "meetings": "not a dict"}'
+    )
+
+    assert utils_mod.get_meeting_file_contents() == {}
+
+
+def test_read_empty_file_returns_empty(tmp_zoom_cli_home: Path) -> None:
+    """Empty {} file (the initial state from _ensure_storage)."""
+    (tmp_zoom_cli_home / "meetings.json").write_text("{}")
+    assert utils_mod.get_meeting_file_contents() == {}
+
+
+def test_meeting_file_transaction_migrates_v0_to_v1(tmp_zoom_cli_home: Path) -> None:
+    """Using the public transaction API on a legacy file produces a v1
+    file — the same opportunistic migration path users hit on first
+    save/edit/rm after upgrade."""
+    target = tmp_zoom_cli_home / "meetings.json"
+    target.write_text('{"old": {"id": "1"}}')
+
+    with utils_mod.meeting_file_transaction() as contents:
+        contents["new"] = {"id": "2"}
+
+    raw = json.loads(target.read_text())
+    assert raw["schema_version"] == 1
+    assert raw["meetings"] == {"old": {"id": "1"}, "new": {"id": "2"}}

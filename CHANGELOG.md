@@ -16,7 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Meetings write surface (PR #52): closes #13 (write piece). New `zoom meetings create / update / delete / end` commands. `ApiClient` gains `post`/`patch`/`put`/`delete` convenience wrappers.
 > Users write surface (PR #53): closes #14 (write + settings-read piece). New `zoom users create / delete / settings get` commands.
 > Recordings surface (PR #54): closes #15. New `zoom recordings list / get / download / delete` commands; `zoom_cli/api/recordings.py`; `ApiClient.stream_download` for atomic streamed downloads.
-> User OAuth + PKCE (this branch): closes #12. New `zoom auth login` 3-legged OAuth flow with loopback callback; `zoom_cli/api/user_oauth.py`; refresh-token storage in keyring service `zoom-cli-user-auth`; extended `auth status` and `auth logout` to cover both surfaces.
+> User OAuth + PKCE (PR #55): closes #12. New `zoom auth login` 3-legged OAuth flow with loopback callback; `zoom_cli/api/user_oauth.py`; refresh-token storage in keyring service `zoom-cli-user-auth`; extended `auth status` and `auth logout` to cover both surfaces.
+> Schema versioning (this branch): closes #24 (final piece). `meetings.json` now wraps the meetings dict in a `{schema_version, meetings}` envelope; legacy v0 (pre-#24) files read transparently and migrate on first write.
+
+### Added (issue #24, schema versioning piece)
+- `zoom_cli/utils.py` — `SCHEMA_VERSION = 1` constant; new `UnknownSchemaVersionError` for files written by a newer CLI; new `_detect_envelope()` helper that handles both v0 (flat dict at root) and v1 (wrapped envelope).
+- `write_to_meeting_file` now emits `{schema_version: 1, meetings: {...}}`. Atomic-write semantics from PR #27 are unchanged.
+- `get_meeting_file_contents` transparently reads both formats — pure read does NOT migrate the file (no surprise modifications). The first `zoom save`/`edit`/`rm` after a CLI upgrade migrates v0 → v1 opportunistically.
+- A v1 file written by a future `schema_version > 1` CLI raises `UnknownSchemaVersionError` with a clear "Upgrade zoom-cli to read it" message — fail-loud rather than silently dropping fields the future version added.
+- A corrupt envelope (`meetings` not a dict) returns empty rather than crashing — fail-soft so the user can re-save.
+- `tests/conftest.py` `write_meetings` fixture now writes the v1 envelope to match what the CLI itself produces.
 
 ### Added (issue #12)
 - `zoom_cli/api/user_oauth.py` — PKCE primitives (`_pkce_pair`, `_random_state`), `build_authorize_url`, `exchange_code_for_tokens`, `refresh_user_tokens`, end-to-end `run_pkce_flow` with loopback HTTP server + browser launch + state-mismatch CSRF check + 5-minute timeout.
