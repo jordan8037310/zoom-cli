@@ -8,7 +8,7 @@ import questionary
 from click_default_group import DefaultGroup
 
 from zoom_cli import auth
-from zoom_cli.api import meetings, oauth, recordings, user_oauth, users
+from zoom_cli.api import meetings, oauth, recordings, user_oauth, users, webhook
 from zoom_cli.api.client import ApiClient, ZoomApiError
 from zoom_cli.commands import (
     _edit,
@@ -1235,6 +1235,54 @@ def recordings_delete(meeting_id, file_id, action, yes, dry_run):
         _exit_on_api_error(exc)
     verb = "Deleted" if action == "delete" else "Trashed"
     click.echo(f"{verb} {target}.")
+
+
+# ---- Zoom Webhooks ------------------------------------------------------
+
+
+@main.group(
+    "webhook",
+    help="Local HMAC-verified Zoom webhook receiver (closes #17).",
+)
+def webhook_cmd():
+    """Group for ``zoom webhook ...``."""
+
+
+@webhook_cmd.command(
+    "serve",
+    help=(
+        "Run a local HTTP server that receives + verifies Zoom webhooks. "
+        "Use with ngrok or similar to expose to the internet during dev."
+    ),
+)
+@click.option(
+    "--secret-token",
+    envvar="ZOOM_WEBHOOK_SECRET",
+    required=True,
+    help=(
+        "The webhook secret token from the Zoom Marketplace app's "
+        "Feature -> Event Subscriptions tab. Picks up "
+        "ZOOM_WEBHOOK_SECRET env var."
+    ),
+)
+@click.option(
+    "--bind",
+    default="127.0.0.1",
+    show_default=True,
+    help="Address to bind. Default 127.0.0.1 (loopback only).",
+)
+@click.option(
+    "--port",
+    type=click.IntRange(1, 65535),
+    default=8000,
+    show_default=True,
+    help="Port to listen on.",
+)
+def webhook_serve(secret_token, bind, port):
+    """Streams verified events to stdout as one-line JSON; rejected
+    deliveries get a 401 + a stderr line. Ctrl-C exits cleanly. Closes
+    #17."""
+    webhook.run_webhook_server(secret_token, bind=bind, port=port)
 
 
 if __name__ == "__main__":

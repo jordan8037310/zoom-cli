@@ -149,6 +149,16 @@ zoom recordings download <meeting-id> [--out-dir DIR] [--file-type MP4 ...]
 zoom recordings delete <meeting-id> [--file-id ID] [--action trash|delete] [--yes] [--dry-run]
 ```
 
+### Webhooks
+
+```
+zoom webhook serve --secret-token TOKEN [--bind 127.0.0.1] [--port 8000]
+                                              # HMAC-verified receiver
+                                              # picks up ZOOM_WEBHOOK_SECRET env var
+```
+
+Streams verified events to stdout as one-line JSON; rejected deliveries get a 401 + a stderr line. Use with `ngrok http 8000` (or similar) to expose to the public internet during development; the receiver itself binds to loopback by default.
+
 ## Codegen (optional, dev tool)
 
 For developers who want statically-typed Pydantic v2 models instead of `dict[str, Any]`, [`scripts/codegen.py`](scripts/codegen.py) wraps `datamodel-code-generator` against Zoom's published OpenAPI spec.
