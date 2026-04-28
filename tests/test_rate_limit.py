@@ -281,3 +281,22 @@ def test_tier_for_classifies_phone_endpoints(method: str, path: str, expected: T
 )
 def test_tier_for_classifies_chat_endpoints(method: str, path: str, expected: Tier) -> None:
     assert tier_for(method, path) == expected
+
+
+# ---- #20 Zoom Reports tier mappings ------------------------------------
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("GET", "/report/daily"),
+        ("GET", "/report/meetings"),
+        ("GET", "/report/users/u-1/meetings"),
+        ("GET", "/report/meetings/12345/participants"),
+        ("GET", "/report/operationlogs"),
+        ("GET", "/report/something/else/we-haven-t-mapped"),
+    ],
+)
+def test_tier_for_classifies_reports_endpoints_as_heavy(method: str, path: str) -> None:
+    """All /report/* endpoints sit on Zoom's HEAVY tier (40/s + 60k/day)."""
+    assert tier_for(method, path) == Tier.HEAVY

@@ -2305,3 +2305,215 @@ def test_chat_messages_send_forwards_reply_id(
     )
     assert result.exit_code == 0, result.output
     assert captured["reply_main_message_id"] == "PARENT-MSG-ID"
+
+
+# ---- #20: zoom reports CLI ---------------------------------------------
+
+
+def _patch_reports_module(monkeypatch: pytest.MonkeyPatch, **funcs):
+    import zoom_cli.__main__ as main_mod
+
+    for name, fn in funcs.items():
+        monkeypatch.setattr(main_mod.reports, name, fn)
+    monkeypatch.setattr(
+        main_mod.oauth, "fetch_access_token", lambda *_a, **_k: _fake_access_token()
+    )
+
+
+def test_reports_daily_prints_json(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_get(_client, *, year, month):
+        captured.update({"year": year, "month": month})
+        return {"year": "2026", "month": "04", "dates": []}
+
+    _patch_reports_module(monkeypatch, get_daily=fake_get)
+    result = runner.invoke(main, ["reports", "daily", "--year", "2026", "--month", "4"])
+    assert result.exit_code == 0, result.output
+    assert captured == {"year": 2026, "month": 4}
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert parsed["year"] == "2026"
+
+
+def test_reports_daily_default_omits_year_month(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_get(_client, *, year, month):
+        captured.update({"year": year, "month": month})
+        return {}
+
+    _patch_reports_module(monkeypatch, get_daily=fake_get)
+    result = runner.invoke(main, ["reports", "daily"])
+    assert result.exit_code == 0, result.output
+    assert captured == {"year": None, "month": None}
+
+
+def test_reports_meetings_list_requires_dates(runner: CliRunner) -> None:
+    _save_creds()
+    result = runner.invoke(main, ["reports", "meetings", "list"])
+    assert result.exit_code != 0
+    assert "from" in result.output.lower() or "missing" in result.output.lower()
+
+
+def test_reports_meetings_list_prints_tab_separated(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, *, user_id, from_, to, meeting_type, page_size):
+        return iter(
+            [
+                {
+                    "uuid": "u-1",
+                    "id": 11,
+                    "topic": "Standup",
+                    "user_email": "alice@example.com",
+                    "start_time": "2026-04-28T10:00:00Z",
+                    "duration": 30,
+                    "participants_count": 5,
+                },
+            ]
+        )
+
+    _patch_reports_module(monkeypatch, list_meetings_report=fake_list)
+    result = runner.invoke(
+        main,
+        [
+            "reports",
+            "meetings",
+            "list",
+            "--from",
+            "2026-04-01",
+            "--to",
+            "2026-04-30",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    lines = result.output.strip().split("\n")
+    assert lines[0] == "uuid\tid\ttopic\tuser_email\tstart_time\tduration\tparticipants_count"
+    assert lines[1] == "u-1\t11\tStandup\talice@example.com\t2026-04-28T10:00:00Z\t30\t5"
+
+
+def test_reports_meetings_list_forwards_filters(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_list(_client, *, user_id, from_, to, meeting_type, page_size):
+        captured.update(
+            {"user_id": user_id, "from_": from_, "to": to, "meeting_type": meeting_type}
+        )
+        return iter([])
+
+    _patch_reports_module(monkeypatch, list_meetings_report=fake_list)
+    result = runner.invoke(
+        main,
+        [
+            "reports",
+            "meetings",
+            "list",
+            "--user-id",
+            "u-X",
+            "--from",
+            "2026-04-01",
+            "--to",
+            "2026-04-30",
+            "--type",
+            "past",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "user_id": "u-X",
+        "from_": "2026-04-01",
+        "to": "2026-04-30",
+        "meeting_type": "past",
+    }
+
+
+def test_reports_meetings_list_rejects_invalid_type(runner: CliRunner) -> None:
+    _save_creds()
+    result = runner.invoke(
+        main,
+        [
+            "reports",
+            "meetings",
+            "list",
+            "--from",
+            "2026-04-01",
+            "--to",
+            "2026-04-30",
+            "--type",
+            "garbage",
+        ],
+    )
+    assert result.exit_code != 0
+
+
+def test_reports_meetings_participants_prints_tab_separated(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, meeting_id, *, page_size):
+        return iter(
+            [
+                {
+                    "id": "p-1",
+                    "name": "Alice",
+                    "user_email": "alice@example.com",
+                    "join_time": "2026-04-28T10:00:00Z",
+                    "leave_time": "2026-04-28T10:30:00Z",
+                    "duration": 1800,
+                },
+            ]
+        )
+
+    _patch_reports_module(monkeypatch, list_meeting_participants=fake_list)
+    result = runner.invoke(main, ["reports", "meetings", "participants", "12345"])
+    assert result.exit_code == 0, result.output
+    lines = result.output.strip().split("\n")
+    assert lines[0] == "id\tname\tuser_email\tjoin_time\tleave_time\tduration"
+    assert lines[1] == (
+        "p-1\tAlice\talice@example.com\t2026-04-28T10:00:00Z\t2026-04-28T10:30:00Z\t1800"
+    )
+
+
+def test_reports_operationlogs_list_forwards_filters(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_list(_client, *, from_, to, category_type, page_size):
+        captured.update({"from_": from_, "to": to, "category_type": category_type})
+        return iter([])
+
+    _patch_reports_module(monkeypatch, list_operation_logs=fake_list)
+    result = runner.invoke(
+        main,
+        [
+            "reports",
+            "operationlogs",
+            "list",
+            "--from",
+            "2026-04-01",
+            "--to",
+            "2026-04-30",
+            "--category-type",
+            "user",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "from_": "2026-04-01",
+        "to": "2026-04-30",
+        "category_type": "user",
+    }

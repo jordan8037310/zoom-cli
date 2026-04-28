@@ -117,6 +117,8 @@ _TIER_RULES: list[tuple[str, re.Pattern[str], Tier]] = [
     # ---- Zoom Team Chat (#19)
     ("GET", re.compile(r"/chat/users/[^/]+/channels"), Tier.MEDIUM),
     ("POST", re.compile(r"/chat/users/[^/]+/messages"), Tier.MEDIUM),
+    # ---- Zoom Reports (#20) — all HEAVY per Zoom docs (40/s + 60k/day)
+    ("GET", re.compile(r"/report/.*"), Tier.HEAVY),
 ]
 
 #: Default tier for unmapped endpoints. MEDIUM matches Zoom's most-common

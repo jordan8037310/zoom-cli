@@ -8,7 +8,17 @@ import questionary
 from click_default_group import DefaultGroup
 
 from zoom_cli import auth
-from zoom_cli.api import chat, meetings, oauth, phone, recordings, user_oauth, users, webhook
+from zoom_cli.api import (
+    chat,
+    meetings,
+    oauth,
+    phone,
+    recordings,
+    reports,
+    user_oauth,
+    users,
+    webhook,
+)
 from zoom_cli.api.client import ApiClient, ZoomApiError
 from zoom_cli.commands import (
     _edit,
@@ -1235,6 +1245,169 @@ def recordings_delete(meeting_id, file_id, action, yes, dry_run):
         _exit_on_api_error(exc)
     verb = "Deleted" if action == "delete" else "Trashed"
     click.echo(f"{verb} {target}.")
+
+
+# ---- Zoom Reports ------------------------------------------------------
+
+
+@main.group(
+    "reports",
+    help="Zoom Reports API (https://developers.zoom.us/docs/api/reports/).",
+)
+def reports_cmd():
+    """Group for ``zoom reports ...``. All Reports endpoints sit on the
+    HEAVY rate-limit tier (40/s + 60k/day) — pass ``RateLimiter()`` to
+    ``ApiClient`` for batch use to stay under the daily cap."""
+
+
+@reports_cmd.command("daily", help="Daily account usage report (JSON dump).")
+@click.option("--year", type=click.IntRange(2010, 2100), help="Year (default: current).")
+@click.option(
+    "--month",
+    type=click.IntRange(1, 12),
+    help="Month (default: current). Both --year and --month omitted = current month.",
+)
+@_translate_keyring_errors
+def reports_daily(year, month):
+    import json as _json
+
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            envelope = reports.get_daily(client, year=year, month=month)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(_json.dumps(envelope, indent=2, sort_keys=True))
+
+
+@reports_cmd.group("meetings", help="Meeting-level reports.")
+def reports_meetings_cmd():
+    pass
+
+
+@reports_meetings_cmd.command(
+    "list",
+    help="List meeting report entries (paginated).",
+)
+@click.option(
+    "--user-id",
+    default=None,
+    help="Limit to one user. Omit for account-wide.",
+)
+@click.option("--from", "from_", required=True, metavar="YYYY-MM-DD")
+@click.option("--to", required=True, metavar="YYYY-MM-DD")
+@click.option(
+    "--type",
+    "meeting_type",
+    type=click.Choice(["past", "pastOne", "pastJoined"]),
+    help="Filter by meeting type.",
+)
+@click.option(
+    "--page-size",
+    type=click.IntRange(1, 300),
+    default=300,
+    show_default=True,
+)
+@_translate_keyring_errors
+def reports_meetings_list(user_id, from_, to, meeting_type, page_size):
+    """TSV: uuid\\tid\\ttopic\\tuser_email\\tstart_time\\tduration\\tparticipants_count."""
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            click.echo("uuid\tid\ttopic\tuser_email\tstart_time\tduration\tparticipants_count")
+            for m in reports.list_meetings_report(
+                client,
+                user_id=user_id,
+                from_=from_,
+                to=to,
+                meeting_type=meeting_type,
+                page_size=page_size,
+            ):
+                click.echo(
+                    f"{m.get('uuid', '')}\t"
+                    f"{m.get('id', '')}\t"
+                    f"{m.get('topic', '')}\t"
+                    f"{m.get('user_email', '')}\t"
+                    f"{m.get('start_time', '')}\t"
+                    f"{m.get('duration', '')}\t"
+                    f"{m.get('participants_count', '')}"
+                )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+
+
+@reports_meetings_cmd.command(
+    "participants",
+    help="List participants for one meeting (paginated).",
+)
+@click.argument("meeting_id")
+@click.option(
+    "--page-size",
+    type=click.IntRange(1, 300),
+    default=300,
+    show_default=True,
+)
+@_translate_keyring_errors
+def reports_meetings_participants(meeting_id, page_size):
+    """TSV: id\\tname\\tuser_email\\tjoin_time\\tleave_time\\tduration."""
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            click.echo("id\tname\tuser_email\tjoin_time\tleave_time\tduration")
+            for p in reports.list_meeting_participants(client, meeting_id, page_size=page_size):
+                click.echo(
+                    f"{p.get('id', '')}\t"
+                    f"{p.get('name', '')}\t"
+                    f"{p.get('user_email', '')}\t"
+                    f"{p.get('join_time', '')}\t"
+                    f"{p.get('leave_time', '')}\t"
+                    f"{p.get('duration', '')}"
+                )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+
+
+@reports_cmd.group("operationlogs", help="Admin operation logs.")
+def reports_operationlogs_cmd():
+    pass
+
+
+@reports_operationlogs_cmd.command("list", help="List admin operation logs (paginated).")
+@click.option("--from", "from_", required=True, metavar="YYYY-MM-DD")
+@click.option("--to", required=True, metavar="YYYY-MM-DD")
+@click.option(
+    "--category-type",
+    help="Filter by category (user, account, billing, zoom_rooms, ...).",
+)
+@click.option(
+    "--page-size",
+    type=click.IntRange(1, 300),
+    default=300,
+    show_default=True,
+)
+@_translate_keyring_errors
+def reports_operationlogs_list(from_, to, category_type, page_size):
+    """TSV: time\\toperator\\tcategory_type\\taction\\toperation_detail."""
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            click.echo("time\toperator\tcategory_type\taction\toperation_detail")
+            for entry in reports.list_operation_logs(
+                client,
+                from_=from_,
+                to=to,
+                category_type=category_type,
+                page_size=page_size,
+            ):
+                click.echo(
+                    f"{entry.get('time', '')}\t"
+                    f"{entry.get('operator', '')}\t"
+                    f"{entry.get('category_type', '')}\t"
+                    f"{entry.get('action', '')}\t"
+                    f"{entry.get('operation_detail', '')}"
+                )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
 
 
 # ---- Zoom Team Chat ----------------------------------------------------
