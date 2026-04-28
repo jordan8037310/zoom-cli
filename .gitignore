@@ -107,6 +107,11 @@ ENV/
 !.env.sample
 !.env.template
 
+# Generated Pydantic models from Zoom OpenAPI (#22). Gitignored by
+# default — teams that want to commit the tree can remove this entry.
+zoom_cli/api/_generated/*
+!zoom_cli/api/_generated/.gitkeep
+
 # Claude Code local-only state (shared config — settings.json, skills/ — IS committed)
 .claude/settings.local.json
 .claude/CLAUDE.local.md

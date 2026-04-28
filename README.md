@@ -149,6 +149,23 @@ zoom recordings download <meeting-id> [--out-dir DIR] [--file-type MP4 ...]
 zoom recordings delete <meeting-id> [--file-id ID] [--action trash|delete] [--yes] [--dry-run]
 ```
 
+## Codegen (optional, dev tool)
+
+For developers who want statically-typed Pydantic v2 models instead of `dict[str, Any]`, [`scripts/codegen.py`](scripts/codegen.py) wraps `datamodel-code-generator` against Zoom's published OpenAPI spec.
+
+```bash
+# Install the codegen extra (only needed when running the script)
+pip install -e '.[codegen]'
+
+# Fetch Zoom's OpenAPI spec (URL changes occasionally — see Zoom developer docs)
+curl -o /tmp/zoom-openapi.json https://developers.zoom.us/openapi-spec/...
+
+# Run the generator (or `--dry-run` to inspect the invocation first)
+python scripts/codegen.py /tmp/zoom-openapi.json
+```
+
+The generated models land in `zoom_cli/api/_generated/` and are gitignored by default. Existing helpers (`users.py`, `meetings.py`, `recordings.py`) still return raw dicts; migrating each to typed return shapes is opt-in per endpoint.
+
 ## Examples
 
 See [`examples/`](examples/) for runnable scripts:
