@@ -159,6 +159,20 @@ zoom webhook serve --secret-token TOKEN [--bind 127.0.0.1] [--port 8000]
 
 Streams verified events to stdout as one-line JSON; rejected deliveries get a 401 + a stderr line. Use with `ngrok http 8000` (or similar) to expose to the public internet during development; the receiver itself binds to loopback by default.
 
+## Releases
+
+Releases publish to PyPI on tag push via [`.github/workflows/release.yml`](.github/workflows/release.yml). The workflow uses [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC) — no API token lives in GitHub secrets. **One-time setup on PyPI:**
+
+1. Create the `zoom-cli` project on PyPI (or claim it).
+2. PyPI project → Settings → Publishing → "Add a new pending publisher" with:
+   - **Owner:** `jordan8037310`
+   - **Repo name:** `zoom-cli`
+   - **Workflow:** `release.yml`
+   - **Environment:** `pypi`
+3. After that's set, cut a release with `git tag vX.Y.Z && git push --tags`.
+
+The workflow can also be triggered manually via the Actions tab ("Run workflow"), with a `dry_run` checkbox that builds the artifacts without uploading — useful for verifying the build before the first real publish.
+
 ## Codegen (optional, dev tool)
 
 For developers who want statically-typed Pydantic v2 models instead of `dict[str, Any]`, [`scripts/codegen.py`](scripts/codegen.py) wraps `datamodel-code-generator` against Zoom's published OpenAPI spec.

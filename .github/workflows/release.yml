@@ -1,0 +1,93 @@
+name: Release
+
+# Builds and publishes the package to PyPI on tag push.
+#
+# Closes the PyPI half of issue #10. Uses PyPI's Trusted Publishing
+# (OIDC) so no API token needs to live in GitHub secrets — the
+# publishing identity is the workflow itself, scoped to the repo +
+# workflow filename + environment name.
+#
+# Setup checklist (one-time, on PyPI side):
+#   1. Create the project on PyPI (or claim it).
+#   2. PyPI project page → Settings → Publishing → Add a Trusted
+#      Publisher with:
+#        - Owner:        jordan8037310
+#        - Repo name:    zoom-cli
+#        - Workflow:     release.yml
+#        - Environment:  pypi
+#   3. Push a tag that matches `v*` (e.g. `git tag v1.2.0 && git push --tags`).
+#
+# The workflow can also be triggered manually via "Run workflow" in
+# the Actions tab, which is useful for the very first release (before
+# the tag-trigger has been exercised).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build only — skip the PyPI upload step"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false  # never cancel a release mid-publish
+
+jobs:
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install build deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+      - name: Build sdist + wheel
+        run: python -m build
+      - name: Verify the build
+        run: |
+          ls -la dist/
+          python -m pip install dist/*.whl
+          python -c "import zoom_cli; print('package version:', zoom_cli.__version__)"
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  publish:
+    name: Publish to PyPI (Trusted Publishing / OIDC)
+    needs: build
+    runs-on: ubuntu-latest
+    # Skip on a dry-run dispatch — the build job's artifacts are still
+    # available for inspection.
+    if: github.event_name == 'push' || github.event.inputs.dry_run != 'true'
+    environment:
+      name: pypi
+      url: https://pypi.org/p/zoom-cli
+    permissions:
+      id-token: write  # OIDC token for Trusted Publishing
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # No `password:` because Trusted Publishing uses OIDC.
+        # Configure the Trusted Publisher entry on PyPI as documented
+        # at the top of this file.
