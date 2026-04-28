@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Codex review follow-ups (PR #32): closes #34, #35, #36, #37, #38, #39, #40, #41, #42, #43, #44, #45, #46, #47.
 > CC security setup (PR #33): adds `.claude/settings.json`, `SECURITY.md`, `LOCAL-SECURITY.md`, `TASKS.md`, and three FACET developer skills.
 > Rate-limit + pagination (PR #48): closes #16 (partial — per-tier token bucket tracked at #49). 429/Retry-After backoff with jitter; `paginate()` generator helper; `users.list_users()` as the first paginated endpoint.
-> Users CLI surface (this branch): closes #14 (read-only piece). New `zoom users list` and `zoom users get <user-id>` commands.
+> Users CLI surface (PR #50): closes #14 (read-only piece). New `zoom users list` and `zoom users get <user-id>` commands.
+> Meetings CLI surface (this branch): closes #13 (read-only piece). New `zoom meetings list` and `zoom meetings get <meeting-id>` commands; `zoom_cli/api/meetings.py` mirrors the structure of `users.py`.
 
 ### Added (issue #14, read-only)
 - New `zoom users list` CLI command — paginates `GET /users` via the helper from PR #48. Tab-separated output (`user_id\temail\ttype\tstatus`) with a header line; pipes cleanly into `cut`/`awk`/`column`. `--status active|inactive|pending` (default `active`) and `--page-size` (1–300, default 300) flags.

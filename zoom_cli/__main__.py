@@ -8,7 +8,7 @@ import questionary
 from click_default_group import DefaultGroup
 
 from zoom_cli import auth
-from zoom_cli.api import oauth, users
+from zoom_cli.api import meetings, oauth, users
 from zoom_cli.api.client import ApiClient, ZoomApiError
 from zoom_cli.commands import (
     _edit,
@@ -432,6 +432,104 @@ def users_list(status, page_size):
                     f"{user.get('email', '')}\t"
                     f"{user.get('type', '')}\t"
                     f"{user.get('status', '')}"
+                )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+
+
+# ---- Zoom Meetings REST API ---------------------------------------------
+
+
+@main.group(
+    "meetings",
+    help="Zoom Meetings API (https://developers.zoom.us/docs/api/meetings/).",
+)
+def meetings_cmd():
+    """Group for ``zoom meetings ...``."""
+
+
+# Fields printed by ``zoom meetings get``. Same one-per-line shape as
+# ``zoom users me`` for visual consistency.
+_MEETING_DETAIL_FIELDS = (
+    "id",
+    "topic",
+    "type",
+    "status",
+    "start_time",
+    "duration",
+    "timezone",
+    "host_email",
+    "join_url",
+)
+
+
+def _print_meeting_detail(meeting: dict) -> None:
+    for field in _MEETING_DETAIL_FIELDS:
+        if field in meeting:
+            click.echo(f"{field}: {meeting[field]}")
+
+
+@meetings_cmd.command("get", help="Print one meeting's details (GET /meetings/<meeting-id>).")
+@click.argument("meeting_id")
+@_translate_keyring_errors
+def meetings_get(meeting_id):
+    """``meeting_id`` is the numeric Zoom meeting ID. Closes #13 (read-only
+    piece) — write commands (create / update / delete / end) are a follow-up
+    that needs separate confirmation-flow design."""
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            meeting = meetings.get_meeting(client, meeting_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    _print_meeting_detail(meeting)
+
+
+@meetings_cmd.command(
+    "list", help="List meetings for a user (paginates GET /users/<user-id>/meetings)."
+)
+@click.option(
+    "--user-id",
+    default="me",
+    show_default=True,
+    help="Whose meetings to list. Default 'me' (the authenticated user).",
+)
+@click.option(
+    "--type",
+    "meeting_type",
+    type=click.Choice(list(meetings.ALLOWED_LIST_TYPES)),
+    default="scheduled",
+    show_default=True,
+    help="Zoom's `type` filter.",
+)
+@click.option(
+    "--page-size",
+    type=click.IntRange(1, 300),
+    default=300,
+    show_default=True,
+    help="Items per page request (Zoom caps `/users/{userId}/meetings` at 300).",
+)
+@_translate_keyring_errors
+def meetings_list(user_id, meeting_type, page_size):
+    """Output is tab-separated (id\\ttopic\\ttype\\tstart_time\\tduration) so
+    it pipes into cut/awk/column. Pagination is handled transparently
+    (PR #48 / #16). Closes #13 (read-only piece)."""
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            click.echo("id\ttopic\ttype\tstart_time\tduration")
+            for meeting in meetings.list_meetings(
+                client,
+                user_id=user_id,
+                meeting_type=meeting_type,
+                page_size=page_size,
+            ):
+                click.echo(
+                    f"{meeting.get('id', '')}\t"
+                    f"{meeting.get('topic', '')}\t"
+                    f"{meeting.get('type', '')}\t"
+                    f"{meeting.get('start_time', '')}\t"
+                    f"{meeting.get('duration', '')}"
                 )
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
