@@ -10,6 +10,7 @@ from click_default_group import DefaultGroup
 from zoom_cli import auth
 from zoom_cli.api import (
     chat,
+    dashboard,
     meetings,
     oauth,
     phone,
@@ -1245,6 +1246,173 @@ def recordings_delete(meeting_id, file_id, action, yes, dry_run):
         _exit_on_api_error(exc)
     verb = "Deleted" if action == "delete" else "Trashed"
     click.echo(f"{verb} {target}.")
+
+
+# ---- Zoom Dashboard / Metrics ------------------------------------------
+
+
+@main.group(
+    "dashboard",
+    help=(
+        "Zoom Dashboard / Metrics API (Business+ plans only). "
+        "https://developers.zoom.us/docs/api/dashboards/"
+    ),
+)
+def dashboard_cmd():
+    """Group for ``zoom dashboard ...``. All endpoints sit on the HEAVY
+    rate-limit tier (40/s + 60k/day)."""
+
+
+@dashboard_cmd.group("meetings", help="Dashboard meeting metrics.")
+def dashboard_meetings_cmd():
+    pass
+
+
+@dashboard_meetings_cmd.command("list", help="List meetings with metrics (paginated).")
+@click.option(
+    "--type",
+    "type_",
+    type=click.Choice(list(dashboard.ALLOWED_MEETING_METRIC_TYPES)),
+    default="past",
+    show_default=True,
+)
+@click.option("--from", "from_", required=True, metavar="YYYY-MM-DD")
+@click.option("--to", required=True, metavar="YYYY-MM-DD")
+@click.option(
+    "--page-size",
+    type=click.IntRange(1, 300),
+    default=300,
+    show_default=True,
+)
+@_translate_keyring_errors
+def dashboard_meetings_list(type_, from_, to, page_size):
+    """TSV: uuid\\tid\\ttopic\\thost\\tparticipants\\tduration\\tstart_time."""
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            click.echo("uuid\tid\ttopic\thost\tparticipants\tduration\tstart_time")
+            for m in dashboard.list_meetings(
+                client,
+                type=type_,
+                from_=from_,
+                to=to,
+                page_size=page_size,
+            ):
+                click.echo(
+                    f"{m.get('uuid', '')}\t"
+                    f"{m.get('id', '')}\t"
+                    f"{m.get('topic', '')}\t"
+                    f"{m.get('host', '')}\t"
+                    f"{m.get('participants', '')}\t"
+                    f"{m.get('duration', '')}\t"
+                    f"{m.get('start_time', '')}"
+                )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+
+
+@dashboard_meetings_cmd.command("get", help="Print one meeting's dashboard metrics (JSON).")
+@click.argument("meeting_id")
+@_translate_keyring_errors
+def dashboard_meetings_get(meeting_id):
+    import json as _json
+
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            envelope = dashboard.get_meeting(client, meeting_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(_json.dumps(envelope, indent=2, sort_keys=True))
+
+
+@dashboard_meetings_cmd.command(
+    "participants",
+    help="List participant metrics for one meeting (paginated).",
+)
+@click.argument("meeting_id")
+@click.option(
+    "--type",
+    "type_",
+    type=click.Choice(list(dashboard.ALLOWED_MEETING_METRIC_TYPES)),
+    default="past",
+    show_default=True,
+)
+@click.option(
+    "--page-size",
+    type=click.IntRange(1, 300),
+    default=300,
+    show_default=True,
+)
+@_translate_keyring_errors
+def dashboard_meetings_participants(meeting_id, type_, page_size):
+    """TSV: id\\tuser_id\\tuser_name\\tjoin_time\\tleave_time\\tduration."""
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            click.echo("id\tuser_id\tuser_name\tjoin_time\tleave_time\tduration")
+            for p in dashboard.list_meeting_participants(
+                client, meeting_id, type=type_, page_size=page_size
+            ):
+                click.echo(
+                    f"{p.get('id', '')}\t"
+                    f"{p.get('user_id', '')}\t"
+                    f"{p.get('user_name', '')}\t"
+                    f"{p.get('join_time', '')}\t"
+                    f"{p.get('leave_time', '')}\t"
+                    f"{p.get('duration', '')}"
+                )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+
+
+@dashboard_cmd.group("zoomrooms", help="Zoom Rooms dashboard metrics.")
+def dashboard_zoomrooms_cmd():
+    pass
+
+
+@dashboard_zoomrooms_cmd.command("list", help="List Zoom Rooms with metrics (paginated).")
+@click.option(
+    "--page-size",
+    type=click.IntRange(1, 300),
+    default=300,
+    show_default=True,
+)
+@_translate_keyring_errors
+def dashboard_zoomrooms_list(page_size):
+    """TSV: id\\troom_name\\tstatus\\tdevice_ip\\tlast_start_time."""
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            click.echo("id\troom_name\tstatus\tdevice_ip\tlast_start_time")
+            for r in dashboard.list_zoomrooms(client, page_size=page_size):
+                click.echo(
+                    f"{r.get('id', '')}\t"
+                    f"{r.get('room_name', '')}\t"
+                    f"{r.get('status', '')}\t"
+                    f"{r.get('device_ip', '')}\t"
+                    f"{r.get('last_start_time', '')}"
+                )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+
+
+@dashboard_zoomrooms_cmd.command(
+    "get",
+    help="Print one Zoom Room's dashboard metrics (JSON).",
+)
+@click.argument("room_id")
+@_translate_keyring_errors
+def dashboard_zoomrooms_get(room_id):
+    import json as _json
+
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            envelope = dashboard.get_zoomroom(client, room_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(_json.dumps(envelope, indent=2, sort_keys=True))
 
 
 # ---- Zoom Reports ------------------------------------------------------
