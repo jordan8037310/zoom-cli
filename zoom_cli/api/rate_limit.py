@@ -82,6 +82,8 @@ _TIER_RULES: list[tuple[str, re.Pattern[str], Tier]] = [
     ("GET", re.compile(r"/users"), Tier.MEDIUM),
     # GET /users/<id>/settings — single-user metadata
     ("GET", re.compile(r"/users/[^/]+/settings"), Tier.LIGHT),
+    # PATCH /users/<id>/settings — write
+    ("PATCH", re.compile(r"/users/[^/]+/settings"), Tier.MEDIUM),
     # GET /users/<id>/meetings — listing for a user
     ("GET", re.compile(r"/users/[^/]+/meetings"), Tier.MEDIUM),
     # GET /users/<id>/recordings — listing recordings

@@ -29,7 +29,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > ApiClient user-OAuth integration (PR #65): completes the user-OAuth story from #12. `ApiClient` now accepts either `S2SCredentials` or `UserOAuthCredentials`; the CLI prefers user-OAuth when both are configured.
 > Webhook timestamp-skew enforcement (PR #66): closes the deferred replay-protection piece from #17. `MAX_TIMESTAMP_SKEW_SECONDS = 300` is now actually enforced — old / future-dated deliveries are rejected with 401 even if the signature verifies.
 > Phone call recording downloads (PR #67): closes the deferred download piece from #18. New `zoom phone recordings download <recording-id>` chains `get_phone_recording` (for the URL) with `ApiClient.stream_download` (atomic write).
-> PyPI release workflow (this branch): closes the PyPI half of #10. New `.github/workflows/release.yml` builds + publishes on tag push via PyPI Trusted Publishing (OIDC, no token in secrets).
+> PyPI release workflow (PR #68): closes the PyPI half of #10. New `.github/workflows/release.yml` builds + publishes on tag push via PyPI Trusted Publishing (OIDC, no token in secrets).
+> Users settings update (this branch): closes the deferred settings-update piece from #14. New `zoom users settings update [user-id] --from-json FILE` rounds out the get → edit → PATCH workflow.
+
+### Added (post-#14 follow-up)
+- `users.update_user_settings(client, user_id, payload)` — `PATCH /users/<user-id>/settings`. Zoom's PATCH semantics leave omitted fields untouched, so callers can pass any subset.
+- `zoom users settings update [user-id] --from-json FILE [--yes] [--dry-run]` — CLI completes the round trip:
+
+  ```bash
+  zoom users settings get me > settings.json   # dump
+  # edit settings.json
+  zoom users settings update me --from-json settings.json   # PATCH back
+  ```
+
+  Validates that `--from-json` parses as a JSON object (rejects arrays / scalars). Always confirms unless `--yes` (settings changes can disable security features like waiting rooms / private chat); the prompt surfaces top-level keys being changed so the user sees the scope without scrolling. `--dry-run` previews the parsed payload without calling the API. `--from-json -` reads from stdin, so `... | zoom users settings update --from-json -` works.
+- `rate_limit.ENDPOINT_TIERS` adds `PATCH /users/<id>/settings` → `Tier.MEDIUM` (write); the GET stays LIGHT.
+
+### Why round-trip instead of per-field flags
+The settings payload has ~50 fields across nested categories (`feature`, `in_meeting`, `email_notification`, `recording`, etc.). Mirroring all of them as flags would be a sprawling surface that drifts whenever Zoom adds a field. The dump-edit-PATCH flow scales to whatever Zoom adds without code changes.
 
 ### Added (issue #10, PyPI half)
 - `.github/workflows/release.yml` — three-stage workflow:

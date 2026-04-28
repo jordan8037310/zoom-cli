@@ -236,3 +236,44 @@ def test_allowed_create_actions_pinned() -> None:
 
 def test_allowed_delete_actions_pinned() -> None:
     assert users.ALLOWED_DELETE_ACTIONS == ("disassociate", "delete")
+
+
+# ---- update_user_settings (PATCH partial) -------------------------------
+
+
+def test_update_user_settings_patches_correct_path() -> None:
+    fake_client = MagicMock()
+    fake_client.patch.return_value = {}
+
+    users.update_user_settings(fake_client, "u-1", {"in_meeting": {"chat": False}})
+
+    fake_client.patch.assert_called_once_with(
+        "/users/u-1/settings", json={"in_meeting": {"chat": False}}
+    )
+
+
+def test_update_user_settings_url_encodes_user_id() -> None:
+    fake_client = MagicMock()
+    fake_client.patch.return_value = {}
+
+    users.update_user_settings(fake_client, "alice@example.com", {"x": 1})
+
+    arg = fake_client.patch.call_args[0][0]
+    assert arg == "/users/alice%40example.com/settings"
+
+
+def test_update_user_settings_passes_payload_through() -> None:
+    """Payload is forwarded as-is — no validation, no field-coverage
+    requirement (the CLI dumps then re-PATCHes, which is the typical
+    workflow)."""
+    fake_client = MagicMock()
+    fake_client.patch.return_value = {}
+
+    payload = {
+        "feature": {"meeting_capacity": 100},
+        "in_meeting": {"chat": True, "private_chat": False},
+        "email_notification": {"jbh_reminder": True},
+    }
+    users.update_user_settings(fake_client, "me", payload)
+
+    assert fake_client.patch.call_args[1]["json"] == payload

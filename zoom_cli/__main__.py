@@ -826,10 +826,17 @@ def users_delete(
 
 @users_cmd.group("settings", help="Read or update a user's account settings.")
 def users_settings_cmd():
-    """Group for ``zoom users settings ...``. Currently only ``get`` is
-    implemented; ``update`` (PATCH /users/<id>/settings) is deferred to
-    a follow-up — the settings payload has ~50 fields and needs design
-    work to map to flags coherently."""
+    """Group for ``zoom users settings ...``.
+
+    Two-step round trip for mass updates:
+
+      zoom users settings get me > settings.json   # dump
+      # edit settings.json
+      zoom users settings update me --from-json settings.json   # patch back
+
+    Per-field flags aren't exposed (~50 fields across nested
+    categories); the round-trip flow is more practical and avoids the
+    coverage / staleness problem of mirroring Zoom's full schema."""
 
 
 @users_settings_cmd.command(
@@ -851,6 +858,81 @@ def users_settings_get(user_id):
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
     click.echo(_json.dumps(settings, indent=2, sort_keys=True))
+
+
+@users_settings_cmd.command(
+    "update",
+    help="PATCH a user's settings from a JSON file (PATCH /users/<user-id>/settings).",
+)
+@click.argument("user_id", default="me", required=False)
+@click.option(
+    "--from-json",
+    "from_json",
+    type=click.File("r", encoding="utf-8"),
+    required=True,
+    help=(
+        "Path to a JSON file containing the (sub-)payload to PATCH. "
+        "Use '-' for stdin. Typical workflow: pipe `zoom users settings "
+        "get me` through `jq`, edit, then PATCH back."
+    ),
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Print the parsed payload without calling the API.",
+)
+@_translate_keyring_errors
+def users_settings_update(user_id, from_json, yes, dry_run):
+    """Zoom PATCH semantics: omitted keys are left untouched, so passing
+    a partial dict only changes the keys you include. Always confirms
+    unless ``--yes`` (settings changes can be invasive — disabling
+    waiting rooms, screen sharing, etc. has security implications)."""
+    import json as _json
+
+    try:
+        payload = _json.load(from_json)
+    except _json.JSONDecodeError as exc:
+        click.echo(f"Invalid JSON in --from-json input: {exc}", err=True)
+        raise click.exceptions.Exit(code=1) from exc
+
+    if not isinstance(payload, dict):
+        click.echo(
+            f"--from-json input must be a JSON object (dict), got {type(payload).__name__}.",
+            err=True,
+        )
+        raise click.exceptions.Exit(code=1)
+
+    if dry_run:
+        click.echo(f"[dry-run] Would PATCH /users/{user_id}/settings with:")
+        click.echo(_json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if not yes:
+        # Surface the top-level keys being changed so the user knows
+        # what they're agreeing to without having to scroll the body.
+        keys = ", ".join(sorted(payload.keys())) or "(empty)"
+        if not click.confirm(
+            f"Update settings for user {user_id}? Top-level keys: {keys}",
+            default=False,
+        ):
+            click.echo("Aborted.")
+            return
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            users.update_user_settings(client, user_id, payload)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Updated settings for user {user_id}.")
 
 
 # ---- Zoom Meetings — write commands -------------------------------------

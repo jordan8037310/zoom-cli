@@ -2902,3 +2902,171 @@ def test_phone_recordings_download_defaults_extension_when_missing(
     )
     assert result.exit_code == 0, result.output
     assert written[0].endswith("rec-X.mp3")
+
+
+# ---- users settings update --from-json -----------------------------------
+
+
+def test_users_settings_update_requires_from_json(runner: CliRunner) -> None:
+    _save_creds()
+    result = runner.invoke(main, ["users", "settings", "update", "u-1"])
+    assert result.exit_code != 0
+    assert "from-json" in result.output.lower() or "missing" in result.output.lower()
+
+
+def test_users_settings_update_dry_run_prints_payload_no_api(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "settings.json"
+    json_file.write_text('{"in_meeting": {"chat": false}}')
+
+    called = {"n": 0}
+
+    def fake_update(*_a, **_k):
+        called["n"] += 1
+
+    _patch_users_module(monkeypatch, update_user_settings=fake_update)
+    result = runner.invoke(
+        main,
+        [
+            "users",
+            "settings",
+            "update",
+            "u-1",
+            "--from-json",
+            str(json_file),
+            "--dry-run",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "[dry-run]" in result.output
+    assert "in_meeting" in result.output
+    assert called["n"] == 0
+
+
+def test_users_settings_update_yes_skips_confirmation(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "settings.json"
+    json_file.write_text('{"in_meeting": {"chat": false}}')
+
+    captured = {}
+
+    def fake_update(_client, user_id, payload):
+        captured.update({"user_id": user_id, "payload": payload})
+
+    _patch_users_module(monkeypatch, update_user_settings=fake_update)
+    result = runner.invoke(
+        main,
+        [
+            "users",
+            "settings",
+            "update",
+            "u-1",
+            "--from-json",
+            str(json_file),
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["user_id"] == "u-1"
+    assert captured["payload"] == {"in_meeting": {"chat": False}}
+    assert "Updated settings for user u-1" in result.output
+
+
+def test_users_settings_update_confirms_and_aborts(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Without --yes, an explicit 'n' aborts and the API is not called."""
+    _save_creds()
+    json_file = tmp_path / "settings.json"
+    json_file.write_text('{"feature": {"meeting_capacity": 100}}')
+
+    called = {"n": 0}
+
+    def fake_update(*_a, **_k):
+        called["n"] += 1
+
+    _patch_users_module(monkeypatch, update_user_settings=fake_update)
+    result = runner.invoke(
+        main,
+        ["users", "settings", "update", "u-1", "--from-json", str(json_file)],
+        input="n\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    assert "feature" in result.output  # confirmation surfaced top-level key
+    assert called["n"] == 0
+
+
+def test_users_settings_update_rejects_invalid_json(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "settings.json"
+    json_file.write_text("not valid json {{{")
+
+    _patch_users_module(monkeypatch, update_user_settings=lambda *_a, **_k: None)
+    result = runner.invoke(
+        main,
+        [
+            "users",
+            "settings",
+            "update",
+            "u-1",
+            "--from-json",
+            str(json_file),
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "Invalid JSON" in result.output
+
+
+def test_users_settings_update_rejects_non_dict_payload(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """--from-json must contain a JSON object; arrays / scalars are
+    rejected (Zoom's PATCH expects a dict)."""
+    _save_creds()
+    json_file = tmp_path / "settings.json"
+    json_file.write_text('["not", "a", "dict"]')
+
+    _patch_users_module(monkeypatch, update_user_settings=lambda *_a, **_k: None)
+    result = runner.invoke(
+        main,
+        [
+            "users",
+            "settings",
+            "update",
+            "u-1",
+            "--from-json",
+            str(json_file),
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "must be a JSON object" in result.output
+
+
+def test_users_settings_update_default_user_me(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Positional user_id defaults to 'me'."""
+    _save_creds()
+    json_file = tmp_path / "settings.json"
+    json_file.write_text('{"feature": {}}')
+
+    captured = {}
+
+    def fake_update(_client, user_id, payload):
+        captured["user_id"] = user_id
+
+    _patch_users_module(monkeypatch, update_user_settings=fake_update)
+    result = runner.invoke(
+        main, ["users", "settings", "update", "--from-json", str(json_file), "--yes"]
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["user_id"] == "me"

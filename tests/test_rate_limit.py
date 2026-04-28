@@ -329,3 +329,13 @@ def test_tier_for_phone_single_recording_is_light() -> None:
     listing). Same shape as users/<id> vs users."""
     assert tier_for("GET", "/phone/recordings/rec-1") == Tier.LIGHT
     assert tier_for("GET", "/phone/recordings") == Tier.MEDIUM
+
+
+# ---- users settings PATCH tier classification --------------------------
+
+
+def test_tier_for_users_settings_patch_is_medium() -> None:
+    """PATCH /users/<id>/settings is a write — MEDIUM tier."""
+    assert tier_for("PATCH", "/users/u-1/settings") == Tier.MEDIUM
+    # Read stays LIGHT.
+    assert tier_for("GET", "/users/u-1/settings") == Tier.LIGHT
