@@ -975,23 +975,53 @@ def _build_meeting_payload(
     return payload
 
 
+def _load_json_payload_or_exit(file_handle, *, label: str) -> dict:
+    """Parse a JSON object from a file/stdin handle; exit 1 with a clear
+    message on parse failure or non-dict top-level. Used by both
+    ``meetings create --from-json`` and ``meetings update --from-json``."""
+    import json as _json
+
+    try:
+        payload = _json.load(file_handle)
+    except _json.JSONDecodeError as exc:
+        click.echo(f"Invalid JSON in {label}: {exc}", err=True)
+        raise click.exceptions.Exit(code=1) from exc
+    if not isinstance(payload, dict):
+        click.echo(
+            f"{label} must be a JSON object (dict), got {type(payload).__name__}.",
+            err=True,
+        )
+        raise click.exceptions.Exit(code=1)
+    return payload
+
+
 @meetings_cmd.command("create", help="Schedule a new meeting (POST /users/<user-id>/meetings).")
-@click.option("--topic", required=True, help="Meeting topic / title.")
+@click.option(
+    "--from-json",
+    "from_json",
+    type=click.File("r", encoding="utf-8"),
+    default=None,
+    help=(
+        "Read the full create-meeting body from a JSON file (or '-' for "
+        "stdin). Mutually exclusive with --topic / --type / etc. Use "
+        "this for meetings that need recurrence or settings sub-objects "
+        "the per-field flags don't expose."
+    ),
+)
+@click.option("--topic", help="Meeting topic / title (required unless --from-json).")
 @click.option(
     "--type",
     "meeting_type",
     type=click.IntRange(1, 8),
-    default=2,
-    show_default=True,
-    help="1=instant, 2=scheduled, 3=recurring no-fixed-time, 8=recurring fixed-time.",
+    default=None,
+    help="1=instant, 2=scheduled (default), 3=recurring no-fixed-time, 8=recurring fixed-time.",
 )
 @click.option("--start-time", help="ISO 8601 (required for type 2 / 8). e.g. 2026-04-29T15:00:00Z")
 @click.option(
     "--duration",
     type=click.IntRange(1, 1440),
-    default=60,
-    show_default=True,
-    help="Minutes.",
+    default=None,
+    help="Minutes (default 60 when not using --from-json).",
 )
 @click.option("--timezone", "tz", help="IANA tz, e.g. America/New_York.")
 @click.option("--password", help="Meeting password. If omitted Zoom auto-generates one.")
@@ -1003,19 +1033,46 @@ def _build_meeting_payload(
     help="Whose calendar to create on. Default 'me'.",
 )
 @_translate_keyring_errors
-def meetings_create(topic, meeting_type, start_time, duration, tz, password, agenda, user_id):
-    """Closes #13 (write piece). Settings (massive sub-object) and
-    recurrence (also complex sub-object) are out of scope for this PR —
-    use the JSON API directly for those until a follow-up adds flags."""
-    payload = _build_meeting_payload(
-        topic=topic,
-        meeting_type=meeting_type,
-        start_time=start_time,
-        duration=duration,
-        timezone=tz,
-        password=password,
-        agenda=agenda,
-    )
+def meetings_create(
+    from_json, topic, meeting_type, start_time, duration, tz, password, agenda, user_id
+):
+    """Two payload-construction modes:
+
+    1. **Per-field flags** (default) — build the simple-meeting payload
+       from ``--topic`` / ``--type`` / etc. ``--topic`` is required.
+
+    2. **--from-json FILE** — pass the full Zoom create-meeting body
+       (including ``settings`` and ``recurrence`` sub-objects) as JSON.
+       Mutually exclusive with the field flags.
+    """
+    field_flags = (topic, meeting_type, start_time, duration, tz, password, agenda)
+    any_field_flag = any(f is not None for f in field_flags)
+
+    if from_json is not None:
+        if any_field_flag:
+            click.echo(
+                "--from-json is mutually exclusive with --topic / --type / "
+                "--start-time / --duration / --timezone / --password / --agenda.",
+                err=True,
+            )
+            raise click.exceptions.Exit(code=1)
+        payload = _load_json_payload_or_exit(from_json, label="--from-json input")
+    else:
+        if not topic:
+            click.echo(
+                "Either --topic (with the field flags) or --from-json is required.",
+                err=True,
+            )
+            raise click.exceptions.Exit(code=1)
+        payload = _build_meeting_payload(
+            topic=topic,
+            meeting_type=meeting_type if meeting_type is not None else 2,
+            start_time=start_time,
+            duration=duration if duration is not None else 60,
+            timezone=tz,
+            password=password,
+            agenda=agenda,
+        )
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
@@ -1027,6 +1084,17 @@ def meetings_create(topic, meeting_type, start_time, duration, tz, password, age
 
 @meetings_cmd.command("update", help="Update an existing meeting (PATCH /meetings/<meeting-id>).")
 @click.argument("meeting_id")
+@click.option(
+    "--from-json",
+    "from_json",
+    type=click.File("r", encoding="utf-8"),
+    default=None,
+    help=(
+        "Read the full update body from a JSON file (or '-' for stdin). "
+        "Mutually exclusive with the per-field flags. Use this for "
+        "settings / recurrence updates the field flags don't expose."
+    ),
+)
 @click.option("--topic", help="New topic.")
 @click.option(
     "--type",
@@ -1040,21 +1108,42 @@ def meetings_create(topic, meeting_type, start_time, duration, tz, password, age
 @click.option("--password", help="New password.")
 @click.option("--agenda", help="New agenda body.")
 @_translate_keyring_errors
-def meetings_update(meeting_id, topic, meeting_type, start_time, duration, tz, password, agenda):
-    """Partial update — only flags you pass are sent. Zoom leaves omitted
-    fields untouched (PATCH semantics)."""
-    payload = _build_meeting_payload(
-        topic=topic,
-        meeting_type=meeting_type,
-        start_time=start_time,
-        duration=duration,
-        timezone=tz,
-        password=password,
-        agenda=agenda,
-    )
-    if not payload:
-        click.echo("Nothing to update — pass at least one --field.", err=True)
-        raise click.exceptions.Exit(code=1)
+def meetings_update(
+    meeting_id, from_json, topic, meeting_type, start_time, duration, tz, password, agenda
+):
+    """Two payload-construction modes (same as ``meetings create``):
+
+    1. **Per-field flags** — partial update; only flags you pass are
+       sent. Errors out if no fields were provided.
+
+    2. **--from-json FILE** — full PATCH body. Useful for settings
+       sub-object updates that the field flags can't express.
+    """
+    field_flags = (topic, meeting_type, start_time, duration, tz, password, agenda)
+    any_field_flag = any(f is not None for f in field_flags)
+
+    if from_json is not None:
+        if any_field_flag:
+            click.echo(
+                "--from-json is mutually exclusive with --topic / --type / "
+                "--start-time / --duration / --timezone / --password / --agenda.",
+                err=True,
+            )
+            raise click.exceptions.Exit(code=1)
+        payload = _load_json_payload_or_exit(from_json, label="--from-json input")
+    else:
+        payload = _build_meeting_payload(
+            topic=topic,
+            meeting_type=meeting_type,
+            start_time=start_time,
+            duration=duration,
+            timezone=tz,
+            password=password,
+            agenda=agenda,
+        )
+        if not payload:
+            click.echo("Nothing to update — pass at least one --field.", err=True)
+            raise click.exceptions.Exit(code=1)
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:

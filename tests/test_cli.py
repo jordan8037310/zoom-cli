@@ -1161,6 +1161,121 @@ def test_meetings_update_sends_only_provided_fields(
     assert "Updated meeting 12345" in result.output
 
 
+# create / update --from-json (settings + recurrence escape hatch)
+
+
+def test_meetings_create_from_json_sends_full_payload(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """--from-json is the escape hatch for the full create-meeting body
+    (settings sub-object + recurrence) that the per-field flags don't
+    expose. The JSON content goes through verbatim."""
+    _save_creds()
+    json_file = tmp_path / "meeting.json"
+    json_file.write_text(
+        '{"topic": "Weekly", "type": 8, "recurrence": {"type": 2, "repeat_interval": 1}, '
+        '"settings": {"join_before_host": true, "waiting_room": false}}'
+    )
+
+    captured = {}
+
+    def fake_create(_client, payload, *, user_id):
+        captured["payload"] = payload
+        captured["user_id"] = user_id
+        return {"id": 999, "topic": payload.get("topic"), "join_url": "https://zoom.us/j/999"}
+
+    _patch_meetings_module(monkeypatch, create_meeting=fake_create)
+    result = runner.invoke(main, ["meetings", "create", "--from-json", str(json_file)])
+    assert result.exit_code == 0, result.output
+    assert captured["user_id"] == "me"
+    assert captured["payload"] == {
+        "topic": "Weekly",
+        "type": 8,
+        "recurrence": {"type": 2, "repeat_interval": 1},
+        "settings": {"join_before_host": True, "waiting_room": False},
+    }
+
+
+def test_meetings_create_from_json_mutually_exclusive_with_field_flags(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "meeting.json"
+    json_file.write_text('{"topic": "x"}')
+
+    _patch_meetings_module(monkeypatch, create_meeting=lambda *_a, **_k: {})
+    result = runner.invoke(
+        main,
+        ["meetings", "create", "--from-json", str(json_file), "--topic", "Other"],
+    )
+    assert result.exit_code == 1
+    assert "mutually exclusive" in result.output
+
+
+def test_meetings_create_from_json_rejects_invalid_json(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "meeting.json"
+    json_file.write_text("not valid {{{")
+
+    _patch_meetings_module(monkeypatch, create_meeting=lambda *_a, **_k: {})
+    result = runner.invoke(main, ["meetings", "create", "--from-json", str(json_file)])
+    assert result.exit_code == 1
+    assert "Invalid JSON" in result.output
+
+
+def test_meetings_create_from_json_rejects_non_dict(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "meeting.json"
+    json_file.write_text('["not", "a", "dict"]')
+
+    _patch_meetings_module(monkeypatch, create_meeting=lambda *_a, **_k: {})
+    result = runner.invoke(main, ["meetings", "create", "--from-json", str(json_file)])
+    assert result.exit_code == 1
+    assert "must be a JSON object" in result.output
+
+
+def test_meetings_update_from_json_sends_full_payload(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """--from-json on update lets you PATCH the settings sub-object that
+    per-field flags can't reach."""
+    _save_creds()
+    json_file = tmp_path / "patch.json"
+    json_file.write_text('{"settings": {"join_before_host": false}}')
+
+    captured = {}
+
+    def fake_update(_client, meeting_id, payload):
+        captured["meeting_id"] = meeting_id
+        captured["payload"] = payload
+
+    _patch_meetings_module(monkeypatch, update_meeting=fake_update)
+    result = runner.invoke(main, ["meetings", "update", "12345", "--from-json", str(json_file)])
+    assert result.exit_code == 0, result.output
+    assert captured["meeting_id"] == "12345"
+    assert captured["payload"] == {"settings": {"join_before_host": False}}
+
+
+def test_meetings_update_from_json_mutually_exclusive_with_field_flags(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "patch.json"
+    json_file.write_text('{"topic": "x"}')
+
+    _patch_meetings_module(monkeypatch, update_meeting=lambda *_a, **_k: None)
+    result = runner.invoke(
+        main,
+        ["meetings", "update", "12345", "--from-json", str(json_file), "--topic", "Other"],
+    )
+    assert result.exit_code == 1
+    assert "mutually exclusive" in result.output
+
+
 # delete
 
 

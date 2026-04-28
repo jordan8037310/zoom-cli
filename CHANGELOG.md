@@ -32,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > PyPI release workflow (PR #68): closes the PyPI half of #10. New `.github/workflows/release.yml` builds + publishes on tag push via PyPI Trusted Publishing (OIDC, no token in secrets).
 > Users settings update (PR #69): closes the deferred settings-update piece from #14. New `zoom users settings update [user-id] --from-json FILE` rounds out the get → edit → PATCH workflow.
 > Codegen `--from-url` (this branch): scripts/codegen.py can now fetch the OpenAPI spec directly instead of requiring a separate `curl` step.
+> Meetings create/update `--from-json` (this branch): `zoom meetings create` and `zoom meetings update` now accept a `--from-json FILE` (or `-` for stdin) payload-construction mode. Mutually exclusive with the per-field flags. Use this for `recurrence` and `settings` sub-objects that the field flags don't expose.
+
+### Added (post-#13 follow-up)
+- `zoom meetings create --from-json FILE` — bypass the per-field flags and POST a full Zoom create-meeting body (settings + recurrence). Validates the file contains a JSON object; rejects scalar / array payloads. Mutually exclusive with `--topic / --type / --start-time / --duration / --timezone / --password / --agenda` (exit 1 with a clear error if both are passed).
+- `zoom meetings update <meeting-id> --from-json FILE` — same escape hatch for PATCH. The "nothing to update" guard still applies to the field-flags path; `--from-json` lets the caller send whatever Zoom accepts.
 
 ### Changed (post-#22 follow-up)
 - `scripts/codegen.py` accepts `--from-url URL` as an alternative to the positional spec path. Mutually exclusive — exactly one source must be provided. Fetches via `httpx` (already a runtime dep, public unauthenticated endpoint), writes to `$TMPDIR/zoom-openapi.*.json`, then runs the existing codegen flow on that tempfile. Failure during fetch surfaces as exit 1 with the underlying error.
