@@ -297,3 +297,67 @@ class ApiClient:
         """Convenience wrapper for ``DELETE``. Most Zoom delete endpoints
         respond with ``204 No Content`` (returns ``{}``)."""
         return self.request("DELETE", path, params=params)
+
+    # ---- streaming download ------------------------------------------
+
+    def stream_download(self, url: str, dest_path: str) -> int:
+        """Stream a download URL to ``dest_path``; return bytes written.
+
+        Used for Zoom recording files (and any other downloadable that
+        isn't on the JSON API). Authenticates via the same bearer token
+        as :meth:`request`. Does NOT go through the JSON parsing path —
+        the body is binary, not JSON.
+
+        Streams the body so a 1.5 GB MP4 doesn't load into memory. Writes
+        via a sibling tempfile + ``os.replace`` so a partial download
+        (network drop) doesn't leave half a file at ``dest_path``.
+
+        On a 401 the cached token is force-refreshed and the stream
+        retried once (same policy as :meth:`request`). 429s on Zoom's
+        download host are uncommon; deferred to issue #49 if needed.
+
+        Raises:
+            ZoomApiError: any non-2xx response, with the response body
+                surfaced as the message.
+        """
+        import os
+        import tempfile
+
+        for force_refresh in (False, True):
+            token = self._access_token(force_refresh=force_refresh)
+            with self._http.stream(
+                "GET",
+                url,
+                headers={"Authorization": f"Bearer {token.value}"},
+            ) as response:
+                if response.status_code == 401 and not force_refresh:
+                    # Drain so the connection can be reused for the retry.
+                    response.read()
+                    continue
+                if response.status_code >= 400:
+                    response.read()
+                    raise ZoomApiError(
+                        response.text or f"HTTP {response.status_code}",
+                        status_code=response.status_code,
+                    )
+                # Stream the body to a tempfile in the same directory as
+                # dest_path so os.replace is atomic.
+                dest_dir = os.path.dirname(os.path.abspath(dest_path)) or "."
+                fd, tmp_path = tempfile.mkstemp(prefix=".zoom-dl.", dir=dest_dir)
+                bytes_written = 0
+                try:
+                    with os.fdopen(fd, "wb") as f:
+                        for chunk in response.iter_bytes():
+                            f.write(chunk)
+                            bytes_written += len(chunk)
+                    os.replace(tmp_path, dest_path)
+                except BaseException:
+                    import contextlib as _ctx
+
+                    with _ctx.suppress(OSError):
+                        os.unlink(tmp_path)
+                    raise
+                return bytes_written
+
+        # Defensive — the for-loop above always returns or raises.
+        raise RuntimeError("unreachable")
