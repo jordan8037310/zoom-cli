@@ -181,11 +181,14 @@ For developers who want statically-typed Pydantic v2 models instead of `dict[str
 # Install the codegen extra (only needed when running the script)
 pip install -e '.[codegen]'
 
-# Fetch Zoom's OpenAPI spec (URL changes occasionally — see Zoom developer docs)
-curl -o /tmp/zoom-openapi.json https://developers.zoom.us/openapi-spec/...
+# Option A: fetch + generate in one step
+python scripts/codegen.py --from-url https://developers.zoom.us/openapi-spec/...
 
-# Run the generator (or `--dry-run` to inspect the invocation first)
+# Option B: fetch separately (useful if you want to inspect / edit the spec first)
+curl -o /tmp/zoom-openapi.json https://developers.zoom.us/openapi-spec/...
 python scripts/codegen.py /tmp/zoom-openapi.json
+
+# Or `--dry-run` against either path to inspect the invocation first.
 ```
 
 The generated models land in `zoom_cli/api/_generated/` and are gitignored by default. Existing helpers (`users.py`, `meetings.py`, `recordings.py`) still return raw dicts; migrating each to typed return shapes is opt-in per endpoint.

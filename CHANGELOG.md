@@ -30,7 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Webhook timestamp-skew enforcement (PR #66): closes the deferred replay-protection piece from #17. `MAX_TIMESTAMP_SKEW_SECONDS = 300` is now actually enforced — old / future-dated deliveries are rejected with 401 even if the signature verifies.
 > Phone call recording downloads (PR #67): closes the deferred download piece from #18. New `zoom phone recordings download <recording-id>` chains `get_phone_recording` (for the URL) with `ApiClient.stream_download` (atomic write).
 > PyPI release workflow (PR #68): closes the PyPI half of #10. New `.github/workflows/release.yml` builds + publishes on tag push via PyPI Trusted Publishing (OIDC, no token in secrets).
-> Users settings update (this branch): closes the deferred settings-update piece from #14. New `zoom users settings update [user-id] --from-json FILE` rounds out the get → edit → PATCH workflow.
+> Users settings update (PR #69): closes the deferred settings-update piece from #14. New `zoom users settings update [user-id] --from-json FILE` rounds out the get → edit → PATCH workflow.
+> Codegen `--from-url` (this branch): scripts/codegen.py can now fetch the OpenAPI spec directly instead of requiring a separate `curl` step.
+
+### Changed (post-#22 follow-up)
+- `scripts/codegen.py` accepts `--from-url URL` as an alternative to the positional spec path. Mutually exclusive — exactly one source must be provided. Fetches via `httpx` (already a runtime dep, public unauthenticated endpoint), writes to `$TMPDIR/zoom-openapi.*.json`, then runs the existing codegen flow on that tempfile. Failure during fetch surfaces as exit 1 with the underlying error.
+- README "Codegen" section updated with the one-step workflow.
 
 ### Added (post-#14 follow-up)
 - `users.update_user_settings(client, user_id, payload)` — `PATCH /users/<user-id>/settings`. Zoom's PATCH semantics leave omitted fields untouched, so callers can pass any subset.

@@ -78,14 +78,54 @@ def _build_argv(spec_path: Path, output_dir: Path) -> list[str]:
     ]
 
 
+def _fetch_spec_to_tempfile(url: str) -> Path:
+    """Fetch ``url`` over HTTPS via httpx (already a runtime dep) and write
+    to a tempfile under ``$TMPDIR``. Returns the tempfile path; the
+    caller owns cleanup (we don't unlink — the spec is small enough to
+    leak harmlessly and useful to inspect on failure).
+
+    Pulled out for testability. We don't reuse the project's ApiClient
+    because the OpenAPI spec is hosted on a public HTTP endpoint with
+    no authentication, and ApiClient would inject a bearer token.
+    """
+    import tempfile
+
+    import httpx
+
+    with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+        response = client.get(url)
+        response.raise_for_status()
+        body = response.content
+
+    fd, path = tempfile.mkstemp(prefix="zoom-openapi.", suffix=".json")
+    with open(fd, "wb") as f:
+        f.write(body)
+    return Path(path)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Generate Pydantic v2 models from a Zoom OpenAPI spec.",
     )
-    parser.add_argument(
+    # `spec` and `--from-url` are mutually exclusive: exactly one must
+    # be provided. argparse handles the required+exclusive contract.
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
         "spec",
+        nargs="?",
         type=Path,
+        default=None,
         help="Path to a local Zoom OpenAPI 3 spec (JSON or YAML).",
+    )
+    source.add_argument(
+        "--from-url",
+        dest="from_url",
+        metavar="URL",
+        help=(
+            "Fetch the spec from a URL (HTTPS) and run codegen on it. "
+            "Saves a `curl` step; the fetched spec is left in $TMPDIR "
+            "for inspection."
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -100,9 +140,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    if not args.spec.exists():
-        print(f"error: spec file not found: {args.spec}", file=sys.stderr)
-        return 1
+    # Resolve the input source.
+    if args.from_url is not None:
+        try:
+            spec_path = _fetch_spec_to_tempfile(args.from_url)
+        except Exception as exc:
+            print(f"error: failed to fetch spec from {args.from_url}: {exc}", file=sys.stderr)
+            return 1
+        print(f"Fetched spec from {args.from_url} -> {spec_path}")
+    else:
+        spec_path = args.spec
+        if not spec_path.exists():
+            print(f"error: spec file not found: {spec_path}", file=sys.stderr)
+            return 1
 
     if shutil.which("datamodel-codegen") is None:
         print(
@@ -112,13 +162,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    cmd = _build_argv(args.spec, args.output_dir)
+    cmd = _build_argv(spec_path, args.output_dir)
 
     if args.dry_run:
         print("Would run:", " ".join(cmd))
         return 0
 
-    print(f"Generating Pydantic models from {args.spec} -> {args.output_dir} ...")
+    print(f"Generating Pydantic models from {spec_path} -> {args.output_dir} ...")
     # The argv here is constructed from a literal command name +
     # explicit flags + caller-controlled paths; safe from shell injection
     # (no shell, list-form argv).
