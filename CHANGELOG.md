@@ -18,7 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Recordings surface (PR #54): closes #15. New `zoom recordings list / get / download / delete` commands; `zoom_cli/api/recordings.py`; `ApiClient.stream_download` for atomic streamed downloads.
 > User OAuth + PKCE (PR #55): closes #12. New `zoom auth login` 3-legged OAuth flow with loopback callback; `zoom_cli/api/user_oauth.py`; refresh-token storage in keyring service `zoom-cli-user-auth`; extended `auth status` and `auth logout` to cover both surfaces.
 > Schema versioning (PR #56): closes #24 (final piece). `meetings.json` now wraps the meetings dict in a `{schema_version, meetings}` envelope; legacy v0 (pre-#24) files read transparently and migrate on first write.
-> Per-tier rate limiting (this branch): closes #49 (follow-up to #16's partial close). `zoom_cli/api/rate_limit.py` with token-bucket + daily counter + endpoint→tier classification; opt-in via `ApiClient(creds, rate_limiter=RateLimiter())`.
+> Per-tier rate limiting (PR #57): closes #49 (follow-up to #16's partial close). `zoom_cli/api/rate_limit.py` with token-bucket + daily counter + endpoint→tier classification; opt-in via `ApiClient(creds, rate_limiter=RateLimiter())`.
+> Documentation rewrite (this branch): closes #23. README rewritten around the two-mode reality (local launcher + REST API), full CLI reference, configuration table, security overview; new `examples/` directory with three runnable scripts.
+
+### Documentation (issue #23)
+- **README rewrite** — restructured around the two operational modes (local launcher + Zoom REST API), each with its own quick-start. New "CLI reference" section enumerates every command. New "Configuration" table maps each storage location (`~/.zoom-cli/`, four keyring services, in-memory) to what it holds. Security section links to `SECURITY.md` / `LOCAL-SECURITY.md` and summarises the highlights. Project-layout block updated for the new `api/` modules.
+- **`examples/`** (new) — three runnable scripts:
+  - `list-active-users.sh` — TSV pipeline: `zoom users list` → `cut`/`sort -u`.
+  - `download-recent-recordings.sh` — list-then-download for the last 7 days; uses `awk` to filter the TSV, calls `zoom recordings download` per meeting.
+  - `batch-meetings-with-rate-limit.py` — programmatic Python use of `ApiClient` with the per-tier `RateLimiter` for batch automation.
 
 ### Added (issue #49)
 - `zoom_cli/api/rate_limit.py` — `Tier` enum (LIGHT/MEDIUM/HEAVY/RESOURCE_INTENSIVE) and `TIER_LIMITS` table pinned by tests against Zoom's published caps (80/60/40/20 per-second; HEAVY + RESOURCE_INTENSIVE additionally cap at 60,000/day). `TokenBucket` and `DailyCounter` primitives take injectable `clock` / `sleep` / `day_clock` for deterministic tests. `RateLimiter` composes the per-tier buckets and daily counters; `acquire(method, path)` blocks (or raises `DailyCapExhaustedError`) and returns the classified tier.
