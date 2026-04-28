@@ -19,7 +19,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > User OAuth + PKCE (PR #55): closes #12. New `zoom auth login` 3-legged OAuth flow with loopback callback; `zoom_cli/api/user_oauth.py`; refresh-token storage in keyring service `zoom-cli-user-auth`; extended `auth status` and `auth logout` to cover both surfaces.
 > Schema versioning (PR #56): closes #24 (final piece). `meetings.json` now wraps the meetings dict in a `{schema_version, meetings}` envelope; legacy v0 (pre-#24) files read transparently and migrate on first write.
 > Per-tier rate limiting (PR #57): closes #49 (follow-up to #16's partial close). `zoom_cli/api/rate_limit.py` with token-bucket + daily counter + endpoint→tier classification; opt-in via `ApiClient(creds, rate_limiter=RateLimiter())`.
-> Documentation rewrite (this branch): closes #23. README rewritten around the two-mode reality (local launcher + REST API), full CLI reference, configuration table, security overview; new `examples/` directory with three runnable scripts.
+> Documentation rewrite (PR #58): closes #23. README rewritten around the two-mode reality (local launcher + REST API), full CLI reference, configuration table, security overview; new `examples/` directory with three runnable scripts.
+> Codegen tooling (this branch): closes #22. New `scripts/codegen.py` wraps `datamodel-code-generator` for Pydantic v2 model generation from Zoom's OpenAPI spec. Optional `[codegen]` extra; output gitignored by default.
+
+### Added (issue #22)
+- `scripts/codegen.py` — reproducible wrapper around `datamodel-code-generator` with the project's preferred flag set pinned in code (Pydantic v2, double quotes, standard collections, py3.10+ syntax, enum-as-literal). Supports `--dry-run` for safe inspection, errors with an actionable message if `datamodel-codegen` isn't installed, propagates non-zero exit codes.
+- New `[codegen]` optional dependency extra: `pip install -e '.[codegen]'` adds `datamodel-code-generator>=0.25,<1`. Kept out of `[dev]` so contributors who don't need codegen don't pull the heavy dep.
+- New `zoom_cli/api/_generated/` placeholder directory (with `.gitkeep`); contents gitignored by default so the generated tree doesn't bloat git history. Teams that want to commit it can remove the `.gitignore` entry.
+- README "Codegen (optional, dev tool)" section documenting the workflow.
+
+### Deferred (issue #22 follow-up)
+- Bundling the spec in the repo (large, fast-moving — fetch-on-demand is the right model).
+- Wiring generated models into existing helpers (`users.py` etc. still return `dict[str, Any]`). Migration is opt-in per endpoint; can land as separate PRs once a developer needs typed access.
+- Pre-generating models for the endpoints currently in use. Each developer runs the script.
 
 ### Documentation (issue #23)
 - **README rewrite** — restructured around the two operational modes (local launcher + Zoom REST API), each with its own quick-start. New "CLI reference" section enumerates every command. New "Configuration" table maps each storage location (`~/.zoom-cli/`, four keyring services, in-memory) to what it holds. Security section links to `SECURITY.md` / `LOCAL-SECURITY.md` and summarises the highlights. Project-layout block updated for the new `api/` modules.

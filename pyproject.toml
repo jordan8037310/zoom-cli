@@ -46,6 +46,12 @@ dev = [
 build = [
     "pyinstaller>=6.0",
 ]
+codegen = [
+    # datamodel-code-generator turns an OpenAPI 3 spec into Pydantic v2
+    # model classes. Optional extra so prod installs stay lean — only
+    # devs running `python scripts/codegen.py ...` need it.
+    "datamodel-code-generator>=0.25,<1",
+]
 
 [project.scripts]
 zoom_cli = "zoom_cli.__main__:main"
