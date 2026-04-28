@@ -12,7 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > CC security setup (PR #33): adds `.claude/settings.json`, `SECURITY.md`, `LOCAL-SECURITY.md`, `TASKS.md`, and three FACET developer skills.
 > Rate-limit + pagination (PR #48): closes #16 (partial — per-tier token bucket tracked at #49). 429/Retry-After backoff with jitter; `paginate()` generator helper; `users.list_users()` as the first paginated endpoint.
 > Users CLI surface (PR #50): closes #14 (read-only piece). New `zoom users list` and `zoom users get <user-id>` commands.
-> Meetings CLI surface (this branch): closes #13 (read-only piece). New `zoom meetings list` and `zoom meetings get <meeting-id>` commands; `zoom_cli/api/meetings.py` mirrors the structure of `users.py`.
+> Meetings CLI surface (PR #51): closes #13 (read-only piece). New `zoom meetings list` and `zoom meetings get <meeting-id>` commands; `zoom_cli/api/meetings.py` mirrors the structure of `users.py`.
+> Meetings write surface (this branch): closes #13 (write piece). New `zoom meetings create / update / delete / end` commands. `ApiClient` gains `post`/`patch`/`put`/`delete` convenience wrappers.
+
+### Added (issue #13, write piece)
+- `zoom meetings create --topic ... [--type] [--start-time] [--duration] [--timezone] [--password] [--agenda] [--user-id me]` — `POST /users/<user-id>/meetings`. Topic is required; everything else is optional. Recurrence + settings sub-objects are out of scope here (use the API directly until a follow-up adds flags).
+- `zoom meetings update <meeting-id> [--topic ...] [...]` — `PATCH /meetings/<id>`. Partial update; only flags you pass are sent. Errors out with exit 1 if no fields were provided.
+- `zoom meetings delete <meeting-id> [--yes] [--dry-run] [--notify-host] [--notify-registrants]` — `DELETE /meetings/<id>`. Confirmation-flow mirrors `zoom rm` (positional id is scripted-friendly; `--yes` skips confirm; `--dry-run` previews without calling the API; notification flags default to silent delete).
+- `zoom meetings end <meeting-id> [--yes]` — `PUT /meetings/<id>/status` with `action=end`. **Always** confirms unless `--yes` because kicking live participants is irreversible.
+- `ApiClient.post(...)`, `.patch(...)`, `.put(...)`, `.delete(...)` convenience wrappers (the underlying `request()` already supported all methods; the wrappers just save callers from typing the method string).
+- `meetings.create_meeting`, `update_meeting`, `delete_meeting`, `end_meeting` API helpers.
 
 ### Added (issue #14, read-only)
 - New `zoom users list` CLI command — paginates `GET /users` via the helper from PR #48. Tab-separated output (`user_id\temail\ttype\tstatus`) with a header line; pipes cleanly into `cut`/`awk`/`column`. `--status active|inactive|pending` (default `active`) and `--page-size` (1–300, default 300) flags.

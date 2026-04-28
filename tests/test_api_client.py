@@ -524,3 +524,78 @@ def test_max_retry_delay_pinned() -> None:
 
 def test_jitter_range_pinned() -> None:
     assert client_mod.JITTER_RANGE == 0.2
+
+
+# ---- HTTP convenience wrappers ------------------------------------------
+
+
+def test_post_delegates_to_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(oauth, "fetch_access_token", lambda *_a, **_k: _fresh_token())
+
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["url"] = str(request.url)
+        captured["body"] = request.content
+        return httpx.Response(201, json={"id": "new"})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    with ApiClient(_creds(), http_client=http) as c:
+        result = c.post("/users", json={"email": "x@y"})
+
+    assert captured["method"] == "POST"
+    assert captured["url"].endswith("/users")
+    assert b"x@y" in captured["body"]
+    assert result == {"id": "new"}
+
+
+def test_patch_delegates_to_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(oauth, "fetch_access_token", lambda *_a, **_k: _fresh_token())
+
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        return httpx.Response(204)  # no content
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    with ApiClient(_creds(), http_client=http) as c:
+        result = c.patch("/meetings/123", json={"topic": "x"})
+
+    assert captured["method"] == "PATCH"
+    assert result == {}  # 204 → empty dict
+
+
+def test_put_delegates_to_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(oauth, "fetch_access_token", lambda *_a, **_k: _fresh_token())
+
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        return httpx.Response(204)
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    with ApiClient(_creds(), http_client=http) as c:
+        c.put("/meetings/123/status", json={"action": "end"})
+
+    assert captured["method"] == "PUT"
+
+
+def test_delete_delegates_to_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(oauth, "fetch_access_token", lambda *_a, **_k: _fresh_token())
+
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["url"] = str(request.url)
+        return httpx.Response(204)
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    with ApiClient(_creds(), http_client=http) as c:
+        c.delete("/meetings/123", params={"foo": "bar"})
+
+    assert captured["method"] == "DELETE"
+    assert "foo=bar" in captured["url"]

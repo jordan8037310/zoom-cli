@@ -1047,3 +1047,246 @@ def test_meetings_list_rejects_unknown_type(runner: CliRunner) -> None:
 def test_meetings_list_rejects_oversize_page(runner: CliRunner) -> None:
     result = runner.invoke(main, ["meetings", "list", "--page-size", "5000"])
     assert result.exit_code != 0
+
+
+# ---- #13 (write): zoom meetings create / update / delete / end -----------
+
+
+def _patch_meetings_module(monkeypatch: pytest.MonkeyPatch, **funcs):
+    """Helper: patch zoom_cli.api.meetings functions and OAuth fetch."""
+    import zoom_cli.__main__ as main_mod
+
+    for name, fn in funcs.items():
+        monkeypatch.setattr(main_mod.meetings, name, fn)
+    monkeypatch.setattr(
+        main_mod.oauth, "fetch_access_token", lambda *_a, **_k: _fake_access_token()
+    )
+
+
+def _save_creds():
+    from zoom_cli import auth
+
+    auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
+
+
+# create
+
+
+def test_meetings_create_requires_topic(runner: CliRunner) -> None:
+    result = runner.invoke(main, ["meetings", "create"])
+    assert result.exit_code != 0
+    assert "topic" in result.output.lower() or "missing" in result.output.lower()
+
+
+def test_meetings_create_builds_payload_and_prints_result(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_create(_client, payload, *, user_id):
+        captured["payload"] = payload
+        captured["user_id"] = user_id
+        return {
+            "id": 555,
+            "topic": payload.get("topic"),
+            "type": payload.get("type"),
+            "join_url": "https://zoom.us/j/555",
+        }
+
+    _patch_meetings_module(monkeypatch, create_meeting=fake_create)
+
+    result = runner.invoke(
+        main,
+        [
+            "meetings",
+            "create",
+            "--topic",
+            "Standup",
+            "--type",
+            "2",
+            "--start-time",
+            "2026-04-29T15:00:00Z",
+            "--duration",
+            "30",
+            "--password",
+            "abc",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["user_id"] == "me"
+    assert captured["payload"] == {
+        "topic": "Standup",
+        "type": 2,
+        "start_time": "2026-04-29T15:00:00Z",
+        "duration": 30,
+        "password": "abc",
+    }
+    assert "555" in result.output
+    assert "Standup" in result.output
+
+
+# update
+
+
+def test_meetings_update_rejects_no_fields(runner: CliRunner) -> None:
+    _save_creds()
+    result = runner.invoke(main, ["meetings", "update", "12345"])
+    assert result.exit_code == 1
+    assert "Nothing to update" in result.output
+
+
+def test_meetings_update_sends_only_provided_fields(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_update(_client, meeting_id, payload):
+        captured["meeting_id"] = meeting_id
+        captured["payload"] = payload
+        return {}
+
+    _patch_meetings_module(monkeypatch, update_meeting=fake_update)
+
+    result = runner.invoke(
+        main,
+        ["meetings", "update", "12345", "--topic", "New title", "--duration", "45"],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["meeting_id"] == "12345"
+    assert captured["payload"] == {"topic": "New title", "duration": 45}
+    assert "Updated meeting 12345" in result.output
+
+
+# delete
+
+
+def test_meetings_delete_dry_run_does_not_call_api(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    called = {"n": 0}
+
+    def fake_delete(*_a, **_k):
+        called["n"] += 1
+        return {}
+
+    _patch_meetings_module(monkeypatch, delete_meeting=fake_delete)
+
+    result = runner.invoke(main, ["meetings", "delete", "12345", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "[dry-run]" in result.output
+    assert "12345" in result.output
+    assert called["n"] == 0
+
+
+def test_meetings_delete_confirms_before_deleting(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without --yes, the user must type 'y' to confirm."""
+    _save_creds()
+    called = {"n": 0}
+
+    def fake_delete(*_a, **_k):
+        called["n"] += 1
+        return {}
+
+    _patch_meetings_module(monkeypatch, delete_meeting=fake_delete)
+
+    # Decline the prompt.
+    result = runner.invoke(main, ["meetings", "delete", "12345"], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    assert called["n"] == 0
+
+
+def test_meetings_delete_yes_skips_confirmation(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_delete(_client, meeting_id, *, schedule_for_reminder, cancel_meeting_reminder):
+        captured["meeting_id"] = meeting_id
+        captured["schedule_for_reminder"] = schedule_for_reminder
+        captured["cancel_meeting_reminder"] = cancel_meeting_reminder
+        return {}
+
+    _patch_meetings_module(monkeypatch, delete_meeting=fake_delete)
+
+    result = runner.invoke(main, ["meetings", "delete", "12345", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured["meeting_id"] == "12345"
+    assert captured["schedule_for_reminder"] is False
+    assert captured["cancel_meeting_reminder"] is False
+    assert "Deleted meeting 12345" in result.output
+
+
+def test_meetings_delete_forwards_notify_flags(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_delete(_client, meeting_id, *, schedule_for_reminder, cancel_meeting_reminder):
+        captured["schedule_for_reminder"] = schedule_for_reminder
+        captured["cancel_meeting_reminder"] = cancel_meeting_reminder
+        return {}
+
+    _patch_meetings_module(monkeypatch, delete_meeting=fake_delete)
+
+    result = runner.invoke(
+        main,
+        [
+            "meetings",
+            "delete",
+            "12345",
+            "--yes",
+            "--notify-host",
+            "--notify-registrants",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["schedule_for_reminder"] is True
+    assert captured["cancel_meeting_reminder"] is True
+
+
+# end
+
+
+def test_meetings_end_confirms_before_ending(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    called = {"n": 0}
+
+    def fake_end(*_a, **_k):
+        called["n"] += 1
+        return {}
+
+    _patch_meetings_module(monkeypatch, end_meeting=fake_end)
+
+    result = runner.invoke(main, ["meetings", "end", "12345"], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    assert "kicks all participants" in result.output
+    assert called["n"] == 0
+
+
+def test_meetings_end_yes_skips_confirmation(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_end(_client, meeting_id):
+        captured["meeting_id"] = meeting_id
+        return {}
+
+    _patch_meetings_module(monkeypatch, end_meeting=fake_end)
+
+    result = runner.invoke(main, ["meetings", "end", "12345", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured["meeting_id"] == "12345"
+    assert "Ended meeting 12345" in result.output
