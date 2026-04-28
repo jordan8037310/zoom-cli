@@ -319,3 +319,13 @@ def test_tier_for_classifies_reports_endpoints_as_heavy(method: str, path: str) 
 def test_tier_for_classifies_dashboard_endpoints_as_heavy(method: str, path: str) -> None:
     """All /metrics/* endpoints are HEAVY per Zoom docs."""
     assert tier_for(method, path) == Tier.HEAVY
+
+
+# ---- phone single-recording (#18 follow-up) → LIGHT --------------------
+
+
+def test_tier_for_phone_single_recording_is_light() -> None:
+    """Single-resource phone recording GET is LIGHT (vs MEDIUM for the
+    listing). Same shape as users/<id> vs users."""
+    assert tier_for("GET", "/phone/recordings/rec-1") == Tier.LIGHT
+    assert tier_for("GET", "/phone/recordings") == Tier.MEDIUM

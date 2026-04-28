@@ -123,6 +123,22 @@ def list_call_queues(
     )
 
 
+def get_phone_recording(client: ApiClient, recording_id: str) -> dict[str, Any]:
+    """``GET /phone/recordings/{recording_id}`` — single recording metadata.
+
+    Returns the recording's envelope including ``download_url``,
+    ``file_extension``, ``duration``, etc. The CLI ``zoom phone
+    recordings download`` chains this with
+    :meth:`ApiClient.stream_download` to fetch the actual audio file.
+
+    URL-encodes the path segment.
+
+    Required scopes: ``phone:read:call_recording`` (or admin
+    equivalent).
+    """
+    return client.get(f"/phone/recordings/{quote(recording_id, safe='')}")
+
+
 def list_phone_recordings(
     client: ApiClient,
     *,
