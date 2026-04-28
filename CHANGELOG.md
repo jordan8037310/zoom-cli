@@ -22,7 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Documentation rewrite (PR #58): closes #23. README rewritten around the two-mode reality (local launcher + REST API), full CLI reference, configuration table, security overview; new `examples/` directory with three runnable scripts.
 > Codegen tooling (PR #59): closes #22. New `scripts/codegen.py` wraps `datamodel-code-generator` for Pydantic v2 model generation from Zoom's OpenAPI spec. Optional `[codegen]` extra; output gitignored by default.
 > Webhook receiver (PR #60): closes #17. New `zoom webhook serve` command + `zoom_cli/api/webhook.py` with constant-time HMAC verification and the endpoint.url_validation handshake.
-> Zoom Phone API (this branch): closes #18 (read-only piece). New `zoom phone users / call-logs / queues / recordings list/get` commands; `zoom_cli/api/phone.py`; tier mappings extended for `/phone/*` endpoints.
+> Zoom Phone API (PR #61): closes #18 (read-only piece). New `zoom phone users / call-logs / queues / recordings list/get` commands; `zoom_cli/api/phone.py`; tier mappings extended for `/phone/*` endpoints.
+> Zoom Team Chat API (this branch): closes #19. New `zoom chat channels list` and `zoom chat messages send` commands; `zoom_cli/api/chat.py`.
+
+### Added (issue #19)
+- `zoom_cli/api/chat.py` — `list_channels(client, *, user_id="me", page_size=50)` paginates `GET /chat/users/<id>/channels` (Zoom caps this at 50 not 300); `send_message(client, *, message, to_channel | to_contact, user_id, reply_main_message_id)` posts to `/chat/users/<id>/messages` and validates that exactly one of `to_channel` / `to_contact` is set.
+- CLI:
+  - `zoom chat channels list [--user-id me] [--page-size N]` — TSV: id\\tname\\ttype.
+  - `zoom chat messages send --message TEXT [--to-channel ID | --to-contact EMAIL] [--user-id me] [--reply-to MSG_ID]` — refuses to run if both or neither target is set.
+- `rate_limit.ENDPOINT_TIERS` extended for `GET /chat/users/<id>/channels` and `POST /chat/users/<id>/messages` → both MEDIUM. Tests pin both.
 
 ### Added (issue #18)
 - `zoom_cli/api/phone.py` — `list_phone_users`, `get_phone_user`, `list_call_logs` (account-wide or per-user), `list_call_queues`, `list_phone_recordings` (account-wide or per-user). All paginated via the helper from PR #48; date-filter forwarding for `--from`/`--to` where applicable.

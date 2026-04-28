@@ -8,7 +8,7 @@ import questionary
 from click_default_group import DefaultGroup
 
 from zoom_cli import auth
-from zoom_cli.api import meetings, oauth, phone, recordings, user_oauth, users, webhook
+from zoom_cli.api import chat, meetings, oauth, phone, recordings, user_oauth, users, webhook
 from zoom_cli.api.client import ApiClient, ZoomApiError
 from zoom_cli.commands import (
     _edit,
@@ -1235,6 +1235,100 @@ def recordings_delete(meeting_id, file_id, action, yes, dry_run):
         _exit_on_api_error(exc)
     verb = "Deleted" if action == "delete" else "Trashed"
     click.echo(f"{verb} {target}.")
+
+
+# ---- Zoom Team Chat ----------------------------------------------------
+
+
+@main.group(
+    "chat",
+    help="Zoom Team Chat API (https://developers.zoom.us/docs/api/chat/).",
+)
+def chat_cmd():
+    """Group for ``zoom chat ...``."""
+
+
+@chat_cmd.group("channels", help="Zoom chat channels.")
+def chat_channels_cmd():
+    pass
+
+
+@chat_channels_cmd.command("list", help="List a user's chat channels (paginated).")
+@click.option(
+    "--user-id",
+    default="me",
+    show_default=True,
+    help="Whose channels to list. Default 'me'.",
+)
+@click.option(
+    "--page-size",
+    type=click.IntRange(1, 50),
+    default=50,
+    show_default=True,
+    help="Items per page (Zoom caps /chat/users/<id>/channels at 50).",
+)
+@_translate_keyring_errors
+def chat_channels_list(user_id, page_size):
+    """TSV: id\\tname\\ttype\\tchannel_settings.posting_permissions."""
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            click.echo("id\tname\ttype")
+            for ch in chat.list_channels(client, user_id=user_id, page_size=page_size):
+                click.echo(f"{ch.get('id', '')}\t{ch.get('name', '')}\t{ch.get('type', '')}")
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+
+
+@chat_cmd.group("messages", help="Zoom chat messages.")
+def chat_messages_cmd():
+    pass
+
+
+@chat_messages_cmd.command("send", help="Send a chat message to a channel or contact.")
+@click.option("--message", "message_text", required=True, help="Message body (text).")
+@click.option("--to-channel", help="Target channel ID (mutually exclusive with --to-contact).")
+@click.option(
+    "--to-contact",
+    help="Target contact email (mutually exclusive with --to-channel).",
+)
+@click.option(
+    "--user-id",
+    default="me",
+    show_default=True,
+    help="Sender. Default 'me' (the authenticated user).",
+)
+@click.option(
+    "--reply-to",
+    "reply_main_message_id",
+    help="Make this a thread reply to the given main message ID.",
+)
+@_translate_keyring_errors
+def chat_messages_send(message_text, to_channel, to_contact, user_id, reply_main_message_id):
+    """Exactly one of --to-channel or --to-contact must be set. Prints
+    the new message ID on success."""
+    if (to_channel is None) == (to_contact is None):
+        click.echo(
+            "Pass exactly one of --to-channel or --to-contact (got both or neither).",
+            err=True,
+        )
+        raise click.exceptions.Exit(code=1)
+
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            result = chat.send_message(
+                client,
+                message=message_text,
+                to_channel=to_channel,
+                to_contact=to_contact,
+                user_id=user_id,
+                reply_main_message_id=reply_main_message_id,
+            )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    msg_id = result.get("id", "")
+    click.echo(f"Sent message {msg_id}.")
 
 
 # ---- Zoom Phone --------------------------------------------------------

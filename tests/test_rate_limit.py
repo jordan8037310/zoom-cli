@@ -265,3 +265,19 @@ def test_tier_limits_match_zoom_published_caps() -> None:
 )
 def test_tier_for_classifies_phone_endpoints(method: str, path: str, expected: Tier) -> None:
     assert tier_for(method, path) == expected
+
+
+# ---- #19 Zoom Chat tier mappings ---------------------------------------
+
+
+@pytest.mark.parametrize(
+    "method,path,expected",
+    [
+        ("GET", "/chat/users/me/channels", Tier.MEDIUM),
+        ("GET", "/chat/users/u-1/channels", Tier.MEDIUM),
+        ("POST", "/chat/users/me/messages", Tier.MEDIUM),
+        ("POST", "/chat/users/u-1/messages", Tier.MEDIUM),
+    ],
+)
+def test_tier_for_classifies_chat_endpoints(method: str, path: str, expected: Tier) -> None:
+    assert tier_for(method, path) == expected

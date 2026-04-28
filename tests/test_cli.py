@@ -2151,3 +2151,157 @@ def test_phone_recordings_list_forwards_filters(
     )
     assert result.exit_code == 0, result.output
     assert captured == {"user_id": "u-X", "from_": "2026-04-01", "to": "2026-04-30"}
+
+
+# ---- #19: zoom chat CLI -------------------------------------------------
+
+
+def _patch_chat_module(monkeypatch: pytest.MonkeyPatch, **funcs):
+    import zoom_cli.__main__ as main_mod
+
+    for name, fn in funcs.items():
+        monkeypatch.setattr(main_mod.chat, name, fn)
+    monkeypatch.setattr(
+        main_mod.oauth, "fetch_access_token", lambda *_a, **_k: _fake_access_token()
+    )
+
+
+def test_chat_channels_list_prints_tab_separated(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, *, user_id, page_size):
+        return iter(
+            [
+                {"id": "c1", "name": "general", "type": 2},
+                {"id": "c2", "name": "engineering", "type": 1},
+            ]
+        )
+
+    _patch_chat_module(monkeypatch, list_channels=fake_list)
+
+    result = runner.invoke(main, ["chat", "channels", "list"])
+    assert result.exit_code == 0, result.output
+    lines = result.output.strip().split("\n")
+    assert lines[0] == "id\tname\ttype"
+    assert lines[1] == "c1\tgeneral\t2"
+    assert lines[2] == "c2\tengineering\t1"
+
+
+def test_chat_channels_list_forwards_user_id(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_list(_client, *, user_id, page_size):
+        captured["user_id"] = user_id
+        return iter([])
+
+    _patch_chat_module(monkeypatch, list_channels=fake_list)
+    result = runner.invoke(main, ["chat", "channels", "list", "--user-id", "alice@example.com"])
+    assert result.exit_code == 0, result.output
+    assert captured["user_id"] == "alice@example.com"
+
+
+def test_chat_messages_send_to_channel(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_send(_client, *, message, to_channel, to_contact, user_id, reply_main_message_id):
+        captured.update(
+            {
+                "message": message,
+                "to_channel": to_channel,
+                "to_contact": to_contact,
+                "user_id": user_id,
+                "reply_main_message_id": reply_main_message_id,
+            }
+        )
+        return {"id": "msg-NEW"}
+
+    _patch_chat_module(monkeypatch, send_message=fake_send)
+    result = runner.invoke(
+        main,
+        ["chat", "messages", "send", "--message", "hello world", "--to-channel", "ch-1"],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["message"] == "hello world"
+    assert captured["to_channel"] == "ch-1"
+    assert captured["to_contact"] is None
+    assert captured["reply_main_message_id"] is None
+    assert "msg-NEW" in result.output
+
+
+def test_chat_messages_send_to_contact(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_send(_client, *, message, to_channel, to_contact, user_id, reply_main_message_id):
+        captured["to_contact"] = to_contact
+        return {"id": "msg-2"}
+
+    _patch_chat_module(monkeypatch, send_message=fake_send)
+    result = runner.invoke(
+        main,
+        ["chat", "messages", "send", "--message", "x", "--to-contact", "bob@example.com"],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["to_contact"] == "bob@example.com"
+
+
+def test_chat_messages_send_rejects_both_targets(runner: CliRunner) -> None:
+    _save_creds()
+    result = runner.invoke(
+        main,
+        [
+            "chat",
+            "messages",
+            "send",
+            "--message",
+            "x",
+            "--to-channel",
+            "ch-1",
+            "--to-contact",
+            "bob@example.com",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "Pass exactly one" in result.output
+
+
+def test_chat_messages_send_rejects_neither_target(runner: CliRunner) -> None:
+    _save_creds()
+    result = runner.invoke(main, ["chat", "messages", "send", "--message", "x"])
+    assert result.exit_code == 1
+    assert "Pass exactly one" in result.output
+
+
+def test_chat_messages_send_forwards_reply_id(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_send(_client, *, message, to_channel, to_contact, user_id, reply_main_message_id):
+        captured["reply_main_message_id"] = reply_main_message_id
+        return {"id": "reply-1"}
+
+    _patch_chat_module(monkeypatch, send_message=fake_send)
+    result = runner.invoke(
+        main,
+        [
+            "chat",
+            "messages",
+            "send",
+            "--message",
+            "x",
+            "--to-channel",
+            "ch-1",
+            "--reply-to",
+            "PARENT-MSG-ID",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["reply_main_message_id"] == "PARENT-MSG-ID"
