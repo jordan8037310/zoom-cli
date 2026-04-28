@@ -15,7 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Meetings CLI surface (PR #51): closes #13 (read-only piece). New `zoom meetings list` and `zoom meetings get <meeting-id>` commands; `zoom_cli/api/meetings.py` mirrors the structure of `users.py`.
 > Meetings write surface (PR #52): closes #13 (write piece). New `zoom meetings create / update / delete / end` commands. `ApiClient` gains `post`/`patch`/`put`/`delete` convenience wrappers.
 > Users write surface (PR #53): closes #14 (write + settings-read piece). New `zoom users create / delete / settings get` commands.
-> Recordings surface (this branch): closes #15. New `zoom recordings list / get / download / delete` commands; `zoom_cli/api/recordings.py`; `ApiClient.stream_download` for atomic streamed downloads.
+> Recordings surface (PR #54): closes #15. New `zoom recordings list / get / download / delete` commands; `zoom_cli/api/recordings.py`; `ApiClient.stream_download` for atomic streamed downloads.
+> User OAuth + PKCE (this branch): closes #12. New `zoom auth login` 3-legged OAuth flow with loopback callback; `zoom_cli/api/user_oauth.py`; refresh-token storage in keyring service `zoom-cli-user-auth`; extended `auth status` and `auth logout` to cover both surfaces.
+
+### Added (issue #12)
+- `zoom_cli/api/user_oauth.py` — PKCE primitives (`_pkce_pair`, `_random_state`), `build_authorize_url`, `exchange_code_for_tokens`, `refresh_user_tokens`, end-to-end `run_pkce_flow` with loopback HTTP server + browser launch + state-mismatch CSRF check + 5-minute timeout.
+- `zoom_cli.auth.UserOAuthCredentials` (refresh_token + client_id) plus `save_user_oauth_credentials` / `load_user_oauth_credentials` / `clear_user_oauth_credentials` / `has_user_oauth_credentials`. Best-effort transactional save (mirrors #35 pattern); load propagates `NoKeyringError` (#41 pattern). Stored under service `zoom-cli-user-auth`, distinct from `zoom-cli-auth` (S2S) so `zoom auth logout` can clear one without touching the other.
+- `zoom auth login --client-id <id> [--port N] [--timeout S] [--no-browser]` CLI command. Picks up `ZOOM_USER_CLIENT_ID` env var. Prints the auth URL before launching the browser so headless / SSH sessions can paste it. `--no-browser` skips the launch (useful when the URL just needs to be shared).
+
+### Changed (issue #12)
+- `zoom auth status` now reports both surfaces (S2S and User OAuth) with separate "configured / not configured" lines plus the right "run X to configure" hint for each.
+- `zoom auth logout` clears both stores (S2S and User OAuth) and reports both clears.
 
 ### Added (issue #15)
 - `zoom recordings list [--user-id me] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--page-size N]` — paginates `GET /users/<user-id>/recordings`. TSV output: `uuid\tmeeting_id\ttopic\tstart_time\tfile_count`.

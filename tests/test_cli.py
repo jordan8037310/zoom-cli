@@ -232,13 +232,15 @@ def test_auth_s2s_set_reads_account_and_client_id_from_env(runner: CliRunner) ->
 
 
 def test_auth_status_when_configured(runner: CliRunner) -> None:
+    """S2S configured + user-OAuth not configured. The output now reports
+    both surfaces (closes #12 status integration), so we just assert the
+    S2S half is shown as configured."""
     from zoom_cli import auth
 
     auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
     result = runner.invoke(main, ["auth", "status"])
     assert result.exit_code == 0, result.output
-    assert "configured" in result.output
-    assert "not configured" not in result.output
+    assert "Server-to-Server OAuth: configured" in result.output
 
 
 def test_auth_logout_clears_keyring(runner: CliRunner) -> None:
@@ -1884,3 +1886,131 @@ def test_recordings_delete_single_file_with_file_id(
     assert result.exit_code == 0, result.output
     assert captured == {"meeting_id": "12345", "recording_id": "rec-abc", "action": "trash"}
     assert bulk_called["n"] == 0
+
+
+# ---- #12: zoom auth login (PKCE) ----------------------------------------
+
+
+def test_auth_login_requires_client_id(runner: CliRunner) -> None:
+    """--client-id has no default — must come from flag or env."""
+    result = runner.invoke(main, ["auth", "login"])
+    assert result.exit_code != 0
+    # Either the env-var path also must be empty, or click reports missing.
+    assert "client-id" in result.output.lower() or "missing" in result.output.lower()
+
+
+def test_auth_login_persists_refresh_token_to_keyring(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stub run_pkce_flow to return tokens directly; assert refresh +
+    client_id land in the keyring."""
+    from datetime import datetime, timedelta, timezone
+
+    import zoom_cli.__main__ as main_mod
+    from zoom_cli import auth
+    from zoom_cli.api.user_oauth import UserOAuthTokens
+
+    fake_tokens = UserOAuthTokens(
+        access_token="acc-123",
+        refresh_token="ref-XYZ",
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        scopes=("user:read", "meeting:read"),
+    )
+
+    captured = {}
+
+    def fake_flow(client_id, **kwargs):
+        captured["client_id"] = client_id
+        captured["kwargs"] = kwargs
+        return fake_tokens
+
+    monkeypatch.setattr(main_mod.user_oauth, "run_pkce_flow", fake_flow)
+
+    result = runner.invoke(main, ["auth", "login", "--client-id", "MY-CID", "--no-browser"])
+    assert result.exit_code == 0, result.output
+    assert captured["client_id"] == "MY-CID"
+    # Browser was suppressed.
+    browser = captured["kwargs"]["browser"]
+    assert callable(browser)
+    assert browser("https://example.com") is False  # the no-op no-browser
+
+    saved = auth.load_user_oauth_credentials()
+    assert saved is not None
+    assert saved.refresh_token == "ref-XYZ"
+    assert saved.client_id == "MY-CID"
+
+    assert "Logged in" in result.output
+    assert "ref-XYZ" not in result.output  # never echo the secret
+
+
+def test_auth_login_reports_oauth_error_distinctly(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import zoom_cli.__main__ as main_mod
+    from zoom_cli.api.user_oauth import ZoomUserAuthError
+
+    def fake_flow(*_a, **_kw):
+        raise ZoomUserAuthError("Code expired", status_code=400, error_code="invalid_grant")
+
+    monkeypatch.setattr(main_mod.user_oauth, "run_pkce_flow", fake_flow)
+
+    result = runner.invoke(main, ["auth", "login", "--client-id", "MY-CID", "--no-browser"])
+    assert result.exit_code == 1
+    assert "OAuth failed" in result.output
+    assert "Code expired" in result.output
+
+
+def test_auth_login_reports_timeout_distinctly(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import zoom_cli.__main__ as main_mod
+
+    def fake_flow(*_a, **_kw):
+        raise TimeoutError("user took too long")
+
+    monkeypatch.setattr(main_mod.user_oauth, "run_pkce_flow", fake_flow)
+    result = runner.invoke(main, ["auth", "login", "--client-id", "MY-CID", "--no-browser"])
+    assert result.exit_code == 1
+    assert "Timed out" in result.output
+
+
+def test_auth_status_reports_both_surfaces(runner: CliRunner) -> None:
+    """Both S2S configured + user OAuth configured."""
+    from zoom_cli import auth
+
+    auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
+    auth.save_user_oauth_credentials(
+        auth.UserOAuthCredentials(refresh_token="rt", client_id="cid-X")
+    )
+    result = runner.invoke(main, ["auth", "status"])
+    assert result.exit_code == 0, result.output
+    assert "Server-to-Server OAuth: configured" in result.output
+    assert "User OAuth (PKCE): configured" in result.output
+
+
+def test_auth_status_reports_user_oauth_unconfigured_separately(runner: CliRunner) -> None:
+    """S2S configured + user OAuth NOT configured → shows the user-side
+    'not configured' line so users know how to add it."""
+    from zoom_cli import auth
+
+    auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
+    result = runner.invoke(main, ["auth", "status"])
+    assert "Server-to-Server OAuth: configured" in result.output
+    assert "User OAuth (PKCE): not configured" in result.output
+
+
+def test_auth_logout_clears_both_stores(runner: CliRunner) -> None:
+    from zoom_cli import auth
+
+    auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
+    auth.save_user_oauth_credentials(auth.UserOAuthCredentials(refresh_token="rt", client_id="cid"))
+    assert auth.has_s2s_credentials() is True
+    assert auth.has_user_oauth_credentials() is True
+
+    result = runner.invoke(main, ["auth", "logout"])
+    assert result.exit_code == 0, result.output
+    assert "Cleared Server-to-Server OAuth" in result.output
+    assert "Cleared User OAuth" in result.output
+
+    assert auth.has_s2s_credentials() is False
+    assert auth.has_user_oauth_credentials() is False

@@ -132,3 +132,95 @@ def has_s2s_credentials() -> bool:
         return load_s2s_credentials() is not None
     except (keyring.errors.NoKeyringError, keyring.errors.InitError):
         return False
+
+
+# ---- User OAuth (PKCE) credential storage (closes #12 storage layer) ----
+#
+# Distinct service name from S2S so a `zoom auth logout` can clear one
+# without touching the other. We persist:
+#   - refresh_token: long-lived (~14 days, rotated on each refresh)
+#   - client_id: needed to re-do the refresh; not secret on its own but
+#     still per-installation, so we store it alongside.
+# access_token is in-memory only — Zoom rotates it every hour and the
+# refresh path is cheap.
+
+#: Keyring service identifier for user-OAuth credentials.
+SERVICE_NAME_USER = "zoom-cli-user-auth"
+
+_USER_REFRESH_KEY = "user.refresh_token"
+_USER_CLIENT_ID_KEY = "user.client_id"
+
+_USER_ALL_KEYS = (_USER_REFRESH_KEY, _USER_CLIENT_ID_KEY)
+
+
+@dataclass(frozen=True)
+class UserOAuthCredentials:
+    """Persisted half of a user-OAuth session.
+
+    The access_token isn't in here — it's short-lived and lives in
+    memory only.
+    """
+
+    refresh_token: str
+    client_id: str
+
+
+def save_user_oauth_credentials(creds: UserOAuthCredentials) -> None:
+    """Persist user-OAuth refresh + client_id to the OS keyring.
+
+    Best-effort transactional, mirroring :func:`save_s2s_credentials`
+    (closes #35 pattern): snapshot existing values, write new ones,
+    restore the snapshot on any partial failure.
+    """
+    snapshot = {key: keyring.get_password(SERVICE_NAME_USER, key) for key in _USER_ALL_KEYS}
+    written: list[str] = []
+    try:
+        for key, value in (
+            (_USER_REFRESH_KEY, creds.refresh_token),
+            (_USER_CLIENT_ID_KEY, creds.client_id),
+        ):
+            keyring.set_password(SERVICE_NAME_USER, key, value)
+            written.append(key)
+    except Exception:
+        for key in written:
+            previous = snapshot[key]
+            with contextlib.suppress(Exception):
+                if previous is None:
+                    keyring.delete_password(SERVICE_NAME_USER, key)
+                else:
+                    keyring.set_password(SERVICE_NAME_USER, key, previous)
+        raise
+
+
+def load_user_oauth_credentials() -> UserOAuthCredentials | None:
+    """Return persisted user-OAuth credentials, or ``None`` if absent.
+
+    Same NoKeyringError-propagates semantics as :func:`load_s2s_credentials`
+    (closes #41): the CLI distinguishes "user has not run `zoom auth login`"
+    from "this machine has no keyring backend at all".
+    """
+    refresh = keyring.get_password(SERVICE_NAME_USER, _USER_REFRESH_KEY)
+    client_id = keyring.get_password(SERVICE_NAME_USER, _USER_CLIENT_ID_KEY)
+    if not (refresh and client_id):
+        return None
+    return UserOAuthCredentials(refresh_token=refresh, client_id=client_id)
+
+
+def clear_user_oauth_credentials() -> None:
+    """Remove all user-OAuth keyring entries. Safe to call when none exist."""
+    for key in _USER_ALL_KEYS:
+        with contextlib.suppress(keyring.errors.PasswordDeleteError):
+            keyring.delete_password(SERVICE_NAME_USER, key)
+
+
+def has_user_oauth_credentials() -> bool:
+    """Cheap "is a user-OAuth session configured?" check.
+
+    Same probe-style semantics as :func:`has_s2s_credentials` — swallows
+    backend-missing errors so ``zoom auth status`` doesn't crash on a
+    misconfigured machine.
+    """
+    try:
+        return load_user_oauth_credentials() is not None
+    except (keyring.errors.NoKeyringError, keyring.errors.InitError):
+        return False
