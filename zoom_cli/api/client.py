@@ -36,9 +36,9 @@ from typing import Any
 
 import httpx
 
-from zoom_cli.api import oauth
+from zoom_cli.api import oauth, user_oauth
 from zoom_cli.api.rate_limit import RateLimiter
-from zoom_cli.auth import S2SCredentials
+from zoom_cli.auth import S2SCredentials, UserOAuthCredentials
 
 #: Zoom REST API base URL. All paths are relative to this.
 API_BASE_URL = "https://api.zoom.us/v2"
@@ -128,28 +128,40 @@ class ApiClient:
 
     def __init__(
         self,
-        credentials: S2SCredentials,
+        credentials: S2SCredentials | UserOAuthCredentials,
         *,
         http_client: httpx.Client | None = None,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
         rate_limiter: RateLimiter | None = None,
+        on_user_token_rotated: Any = None,
     ) -> None:
         """Construct an ApiClient.
 
-        ``rate_limiter`` (closes #49): if set, ``acquire(method, url)`` is
-        called before every request to throttle against Zoom's per-tier
-        per-account limits. Default ``None`` = no proactive limiting; the
-        429/Retry-After backoff from #16 still catches reactive
-        throttling. Pass an instance for batch / long-running automation:
+        Accepts either S2S or user-OAuth credentials — the auth flow
+        chooses itself based on the type passed in.
 
-            from zoom_cli.api.rate_limit import RateLimiter
-            client = ApiClient(creds, rate_limiter=RateLimiter())
+          - :class:`~zoom_cli.auth.S2SCredentials` → standard S2S
+            ``account_credentials`` token exchange.
+          - :class:`~zoom_cli.auth.UserOAuthCredentials` → uses the
+            persisted refresh_token to mint access tokens via
+            :func:`zoom_cli.api.user_oauth.refresh_user_tokens`. Zoom
+            **rotates** the refresh_token on every refresh (~14-day
+            lifetime), so ``on_user_token_rotated(new_creds)`` is
+            invoked after every successful refresh — the CLI hooks
+            this to persist the rotated value back to the OS keyring
+            via :func:`zoom_cli.auth.save_user_oauth_credentials`.
+
+        ``rate_limiter`` (closes #49): if set, ``acquire(method, url)``
+        is called before every request to throttle against Zoom's
+        per-tier per-account limits.
         """
         self._credentials = credentials
         self._owns_client = http_client is None
         self._http = http_client if http_client is not None else httpx.Client(timeout=timeout)
         self._cached_token: oauth.AccessToken | None = None
         self._rate_limiter = rate_limiter
+        # User-OAuth specific: callback to persist rotated refresh tokens.
+        self._on_user_token_rotated = on_user_token_rotated
 
     # ---- context-manager hooks ---------------------------------------
 
@@ -176,10 +188,39 @@ class ApiClient:
         ``force_refresh=True`` is used by the 401 retry path: even if the
         cached token *thinks* it's still valid, the server has told us
         otherwise, so we drop the cache and re-fetch.
+
+        Routes to S2S or user-OAuth refresh based on the credentials
+        type. User-OAuth refresh ALWAYS rotates the refresh_token and
+        invokes ``on_user_token_rotated`` so the caller can persist the
+        new value (Zoom invalidates the old refresh_token immediately).
         """
         if force_refresh:
             self._cached_token = None
-        if self._cached_token is None or self._cached_token.is_expired:
+        if self._cached_token is not None and not self._cached_token.is_expired:
+            return self._cached_token
+
+        if isinstance(self._credentials, UserOAuthCredentials):
+            tokens = user_oauth.refresh_user_tokens(
+                refresh_token=self._credentials.refresh_token,
+                client_id=self._credentials.client_id,
+                http=self._http,
+            )
+            # Refresh tokens are rotated — the new value invalidates the
+            # old, so persisting immediately is critical for the next
+            # session. Update our in-memory creds and notify the caller.
+            new_creds = UserOAuthCredentials(
+                refresh_token=tokens.refresh_token,
+                client_id=self._credentials.client_id,
+            )
+            self._credentials = new_creds
+            if self._on_user_token_rotated is not None:
+                self._on_user_token_rotated(new_creds)
+            self._cached_token = oauth.AccessToken(
+                value=tokens.access_token,
+                expires_at=tokens.expires_at,
+                scopes=tokens.scopes,
+            )
+        else:
             self._cached_token = oauth.fetch_access_token(self._credentials, client=self._http)
         return self._cached_token
 

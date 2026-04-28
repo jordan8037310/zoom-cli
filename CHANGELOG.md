@@ -25,7 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Zoom Phone API (PR #61): closes #18 (read-only piece). New `zoom phone users / call-logs / queues / recordings list/get` commands; `zoom_cli/api/phone.py`; tier mappings extended for `/phone/*` endpoints.
 > Zoom Team Chat API (PR #62): closes #19. New `zoom chat channels list` and `zoom chat messages send` commands; `zoom_cli/api/chat.py`.
 > Zoom Reports API (PR #63): closes #20. New `zoom reports daily / meetings list / meetings participants / operationlogs list` commands; `zoom_cli/api/reports.py`; tier mappings extended for `/report/*` (HEAVY tier).
-> Zoom Dashboard API (this branch): closes #21. New `zoom dashboard meetings list / get / participants` and `zoom dashboard zoomrooms list / get` commands; `zoom_cli/api/dashboard.py`; tier mappings extended for `/metrics/*` (HEAVY tier). Requires Business+ Zoom plan.
+> Zoom Dashboard API (PR #64): closes #21. New `zoom dashboard meetings list / get / participants` and `zoom dashboard zoomrooms list / get` commands; `zoom_cli/api/dashboard.py`; tier mappings extended for `/metrics/*` (HEAVY tier). Requires Business+ Zoom plan.
+> ApiClient user-OAuth integration (this branch): completes the user-OAuth story from #12. `ApiClient` now accepts either `S2SCredentials` or `UserOAuthCredentials`; the CLI prefers user-OAuth when both are configured.
+
+### Added (post-#12 follow-up)
+- `ApiClient(credentials, ..., on_user_token_rotated=...)` — `credentials` now accepts either `S2SCredentials` or `UserOAuthCredentials`. For user-OAuth, every refresh rotates the persisted refresh_token (Zoom invalidates the old one immediately), and the optional callback fires with the new credentials so the caller can persist them.
+- `_load_creds_or_exit()` (CLI) — resolves user-OAuth first, falls back to S2S, then exits with a friendly two-path message if neither is set.
+- `_build_api_client(creds)` (CLI) — wires `on_user_token_rotated=auth.save_user_oauth_credentials` automatically for user-OAuth credentials so rotated refresh tokens persist transactionally (mirrors the #35 pattern).
+- All 32 `ApiClient(creds)` call sites in `__main__.py` switched to `_build_api_client(creds)` so every API command (users, meetings, recordings, phone, chat, reports, dashboard) works with either auth surface.
+
+### Net effect
+After `zoom auth login --client-id ID`, every existing API command (`zoom users me`, `zoom meetings list`, etc.) Just Works with the user-OAuth refresh token. No more "user OAuth is configured but nothing uses it" gap.
 
 ### Added (issue #21)
 - `zoom_cli/api/dashboard.py` — `list_meetings(client, *, type, from_, to)`, `get_meeting(client, meeting_id)`, `list_meeting_participants(client, meeting_id, *, type)`, `list_zoomrooms(client)`, `get_zoomroom(client, room_id)`. `type` validated against `ALLOWED_MEETING_METRIC_TYPES = ("past", "live", "pastOne")`. URL-encodes meeting_id and room_id.

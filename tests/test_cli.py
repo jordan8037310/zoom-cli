@@ -2710,3 +2710,105 @@ def test_dashboard_zoomrooms_get_prints_json(
 
     parsed = _json.loads(result.output)
     assert parsed["id"] == "r-1"
+
+
+# ---- _load_creds_or_exit + _build_api_client (user-OAuth integration) ---
+
+
+def test_load_creds_prefers_user_oauth_when_both_configured(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When both auth surfaces are configured, user-OAuth wins. This is
+    the developer-friendly default — `zoom auth login` is the personal
+    flow, S2S is the org flow."""
+    import zoom_cli.__main__ as main_mod
+    from zoom_cli import auth
+
+    auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
+    auth.save_user_oauth_credentials(
+        auth.UserOAuthCredentials(refresh_token="user-rt", client_id="user-cid")
+    )
+
+    captured = {"creds_type": None}
+
+    # `zoom users me` is the simplest path that exercises _load_creds_or_exit.
+    def fake_get_me(_client):
+        return {"id": "u-1", "email": "x@y", "display_name": "X"}
+
+    def fake_build(creds):
+        captured["creds_type"] = type(creds).__name__
+        # Return a fake client context manager — the test only cares which
+        # creds were chosen.
+        from contextlib import nullcontext
+
+        return nullcontext(enter_result=object())
+
+    monkeypatch.setattr(main_mod.users, "get_me", fake_get_me)
+    monkeypatch.setattr(main_mod, "_build_api_client", fake_build)
+
+    result = runner.invoke(main, ["users", "me"])
+    assert result.exit_code == 0, result.output
+    assert captured["creds_type"] == "UserOAuthCredentials"
+
+
+def test_load_creds_falls_back_to_s2s_when_only_s2s_configured(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import zoom_cli.__main__ as main_mod
+    from zoom_cli import auth
+
+    auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
+
+    captured = {"creds_type": None}
+
+    def fake_get_me(_client):
+        return {"id": "u-1", "email": "x@y"}
+
+    def fake_build(creds):
+        captured["creds_type"] = type(creds).__name__
+        from contextlib import nullcontext
+
+        return nullcontext(enter_result=object())
+
+    monkeypatch.setattr(main_mod.users, "get_me", fake_get_me)
+    monkeypatch.setattr(main_mod, "_build_api_client", fake_build)
+
+    result = runner.invoke(main, ["users", "me"])
+    assert result.exit_code == 0, result.output
+    assert captured["creds_type"] == "S2SCredentials"
+
+
+def test_load_creds_friendly_message_when_neither_configured(runner: CliRunner) -> None:
+    """No auth configured at all → mention BOTH setup paths."""
+    result = runner.invoke(main, ["users", "me"])
+    assert result.exit_code == 1
+    assert "zoom auth s2s set" in result.output
+    assert "zoom auth login" in result.output
+
+
+def test_build_api_client_wires_rotation_callback_for_user_oauth() -> None:
+    """_build_api_client should pass on_user_token_rotated for user-OAuth
+    creds so rotated refresh tokens get persisted."""
+    import zoom_cli.__main__ as main_mod
+    from zoom_cli import auth
+
+    user_creds = auth.UserOAuthCredentials(refresh_token="rt", client_id="cid")
+    client = main_mod._build_api_client(user_creds)
+    try:
+        # The callback should be auth.save_user_oauth_credentials.
+        assert client._on_user_token_rotated is auth.save_user_oauth_credentials
+    finally:
+        client.close()
+
+
+def test_build_api_client_no_callback_for_s2s() -> None:
+    """S2S doesn't have rotation; on_user_token_rotated should stay None."""
+    import zoom_cli.__main__ as main_mod
+    from zoom_cli import auth
+
+    s2s = auth.S2SCredentials(account_id="a", client_id="b", client_secret="c")
+    client = main_mod._build_api_client(s2s)
+    try:
+        assert client._on_user_token_rotated is None
+    finally:
+        client.close()
