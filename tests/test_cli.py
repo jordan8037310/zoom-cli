@@ -892,3 +892,158 @@ def test_users_list_rejects_oversize_page(runner: CliRunner) -> None:
     """click.IntRange should cap at 300 (Zoom's per-endpoint maximum)."""
     result = runner.invoke(main, ["users", "list", "--page-size", "5000"])
     assert result.exit_code != 0
+
+
+# ---- #13 (read-only): zoom meetings get / list CLI ----------------------
+
+
+def test_meetings_get_bails_when_no_credentials(runner: CliRunner) -> None:
+    result = runner.invoke(main, ["meetings", "get", "12345"])
+    assert result.exit_code == 1
+    assert "No Server-to-Server" in result.output
+
+
+def test_meetings_get_prints_well_known_fields(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import zoom_cli.__main__ as main_mod
+    from zoom_cli import auth
+
+    auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
+
+    captured = {}
+
+    def fake_get_meeting(_client, meeting_id):
+        captured["meeting_id"] = meeting_id
+        return {
+            "id": 12345,
+            "topic": "Daily standup",
+            "type": 2,
+            "status": "started",
+            "start_time": "2026-04-28T15:00:00Z",
+            "duration": 30,
+            "timezone": "UTC",
+            "host_email": "alice@example.com",
+            "join_url": "https://zoom.us/j/12345",
+            # Fields we don't print:
+            "agenda": "🚀 launch",
+            "settings": {"approval_type": 0},
+        }
+
+    monkeypatch.setattr(main_mod.meetings, "get_meeting", fake_get_meeting)
+    monkeypatch.setattr(
+        main_mod.oauth, "fetch_access_token", lambda *_a, **_k: _fake_access_token()
+    )
+
+    result = runner.invoke(main, ["meetings", "get", "12345"])
+    assert result.exit_code == 0, result.output
+    assert captured["meeting_id"] == "12345"
+    assert "Daily standup" in result.output
+    assert "alice@example.com" in result.output
+    assert "agenda" not in result.output  # not in the printed subset
+    assert "settings" not in result.output
+
+
+def test_meetings_list_bails_when_no_credentials(runner: CliRunner) -> None:
+    result = runner.invoke(main, ["meetings", "list"])
+    assert result.exit_code == 1
+    assert "No Server-to-Server" in result.output
+
+
+def test_meetings_list_prints_tab_separated_with_header(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import zoom_cli.__main__ as main_mod
+    from zoom_cli import auth
+
+    auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
+
+    captured = {}
+
+    def fake_list_meetings(_client, *, user_id, meeting_type, page_size):
+        captured["user_id"] = user_id
+        captured["meeting_type"] = meeting_type
+        captured["page_size"] = page_size
+        return iter(
+            [
+                {
+                    "id": 11,
+                    "topic": "M1",
+                    "type": 2,
+                    "start_time": "2026-04-28T10:00:00Z",
+                    "duration": 30,
+                },
+                {
+                    "id": 22,
+                    "topic": "M2",
+                    "type": 8,
+                    "start_time": "2026-04-29T11:00:00Z",
+                    "duration": 60,
+                },
+            ]
+        )
+
+    monkeypatch.setattr(main_mod.meetings, "list_meetings", fake_list_meetings)
+    monkeypatch.setattr(
+        main_mod.oauth, "fetch_access_token", lambda *_a, **_k: _fake_access_token()
+    )
+
+    result = runner.invoke(main, ["meetings", "list"])
+    assert result.exit_code == 0, result.output
+    lines = result.output.strip().split("\n")
+    assert lines[0] == "id\ttopic\ttype\tstart_time\tduration"
+    assert lines[1] == "11\tM1\t2\t2026-04-28T10:00:00Z\t30"
+    assert lines[2] == "22\tM2\t8\t2026-04-29T11:00:00Z\t60"
+
+    # Defaults flow through.
+    assert captured["user_id"] == "me"
+    assert captured["meeting_type"] == "scheduled"
+    assert captured["page_size"] == 300
+
+
+def test_meetings_list_forwards_user_id_type_page_size(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import zoom_cli.__main__ as main_mod
+    from zoom_cli import auth
+
+    auth.save_s2s_credentials(auth.S2SCredentials(account_id="a", client_id="b", client_secret="c"))
+
+    captured = {}
+
+    def fake_list_meetings(_client, *, user_id, meeting_type, page_size):
+        captured.update({"user_id": user_id, "meeting_type": meeting_type, "page_size": page_size})
+        return iter([])
+
+    monkeypatch.setattr(main_mod.meetings, "list_meetings", fake_list_meetings)
+    monkeypatch.setattr(
+        main_mod.oauth, "fetch_access_token", lambda *_a, **_k: _fake_access_token()
+    )
+
+    result = runner.invoke(
+        main,
+        [
+            "meetings",
+            "list",
+            "--user-id",
+            "alice@example.com",
+            "--type",
+            "live",
+            "--page-size",
+            "50",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["user_id"] == "alice@example.com"
+    assert captured["meeting_type"] == "live"
+    assert captured["page_size"] == 50
+
+
+def test_meetings_list_rejects_unknown_type(runner: CliRunner) -> None:
+    result = runner.invoke(main, ["meetings", "list", "--type", "garbage"])
+    assert result.exit_code != 0
+
+
+def test_meetings_list_rejects_oversize_page(runner: CliRunner) -> None:
+    result = runner.invoke(main, ["meetings", "list", "--page-size", "5000"])
+    assert result.exit_code != 0
