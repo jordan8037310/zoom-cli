@@ -8,7 +8,7 @@ import questionary
 from click_default_group import DefaultGroup
 
 from zoom_cli import auth
-from zoom_cli.api import meetings, oauth, recordings, user_oauth, users, webhook
+from zoom_cli.api import meetings, oauth, phone, recordings, user_oauth, users, webhook
 from zoom_cli.api.client import ApiClient, ZoomApiError
 from zoom_cli.commands import (
     _edit,
@@ -1235,6 +1235,181 @@ def recordings_delete(meeting_id, file_id, action, yes, dry_run):
         _exit_on_api_error(exc)
     verb = "Deleted" if action == "delete" else "Trashed"
     click.echo(f"{verb} {target}.")
+
+
+# ---- Zoom Phone --------------------------------------------------------
+
+
+@main.group(
+    "phone",
+    help="Zoom Phone API (https://developers.zoom.us/docs/api/phone/).",
+)
+def phone_cmd():
+    """Group for ``zoom phone ...``."""
+
+
+@phone_cmd.group("users", help="Zoom Phone users.")
+def phone_users_cmd():
+    pass
+
+
+@phone_users_cmd.command("list", help="List phone-licensed users (paginated).")
+@click.option(
+    "--page-size",
+    type=click.IntRange(1, 300),
+    default=300,
+    show_default=True,
+)
+@_translate_keyring_errors
+def phone_users_list(page_size):
+    """TSV: id\\temail\\textension_number\\tstatus."""
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            click.echo("id\temail\textension_number\tstatus")
+            for u in phone.list_phone_users(client, page_size=page_size):
+                click.echo(
+                    f"{u.get('id', '')}\t"
+                    f"{u.get('email', '')}\t"
+                    f"{u.get('extension_number', '')}\t"
+                    f"{u.get('status', '')}"
+                )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+
+
+@phone_users_cmd.command("get", help="Print a phone user's profile (JSON).")
+@click.argument("user_id")
+@_translate_keyring_errors
+def phone_users_get(user_id):
+    import json as _json
+
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            profile = phone.get_phone_user(client, user_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(_json.dumps(profile, indent=2, sort_keys=True))
+
+
+@phone_cmd.group("call-logs", help="Zoom Phone call logs.")
+def phone_call_logs_cmd():
+    pass
+
+
+@phone_call_logs_cmd.command("list", help="List call log entries (paginated).")
+@click.option(
+    "--user-id",
+    default=None,
+    help="Limit to one user's call logs. Omit for account-wide.",
+)
+@click.option("--from", "from_", metavar="YYYY-MM-DD", help="Lower bound on date.")
+@click.option("--to", metavar="YYYY-MM-DD", help="Upper bound on date.")
+@click.option(
+    "--page-size",
+    type=click.IntRange(1, 300),
+    default=300,
+    show_default=True,
+)
+@_translate_keyring_errors
+def phone_call_logs_list(user_id, from_, to, page_size):
+    """TSV: id\\tdirection\\tcaller_number\\tcallee_number\\tstart_time\\tduration."""
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            click.echo("id\tdirection\tcaller_number\tcallee_number\tstart_time\tduration")
+            for entry in phone.list_call_logs(
+                client,
+                user_id=user_id,
+                from_=from_,
+                to=to,
+                page_size=page_size,
+            ):
+                click.echo(
+                    f"{entry.get('id', '')}\t"
+                    f"{entry.get('direction', '')}\t"
+                    f"{entry.get('caller_number', '')}\t"
+                    f"{entry.get('callee_number', '')}\t"
+                    f"{entry.get('start_time', '')}\t"
+                    f"{entry.get('duration', '')}"
+                )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+
+
+@phone_cmd.group("queues", help="Zoom Phone call queues.")
+def phone_queues_cmd():
+    pass
+
+
+@phone_queues_cmd.command("list", help="List call queues (paginated).")
+@click.option(
+    "--page-size",
+    type=click.IntRange(1, 300),
+    default=300,
+    show_default=True,
+)
+@_translate_keyring_errors
+def phone_queues_list(page_size):
+    """TSV: id\\tname\\textension_number\\tsite_name."""
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            click.echo("id\tname\textension_number\tsite_name")
+            for q in phone.list_call_queues(client, page_size=page_size):
+                click.echo(
+                    f"{q.get('id', '')}\t"
+                    f"{q.get('name', '')}\t"
+                    f"{q.get('extension_number', '')}\t"
+                    f"{q.get('site', {}).get('name', '')}"
+                )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+
+
+@phone_cmd.group("recordings", help="Zoom Phone call recordings.")
+def phone_recordings_cmd():
+    pass
+
+
+@phone_recordings_cmd.command("list", help="List phone call recordings (paginated).")
+@click.option(
+    "--user-id",
+    default=None,
+    help="Limit to one user. Omit for account-wide.",
+)
+@click.option("--from", "from_", metavar="YYYY-MM-DD")
+@click.option("--to", metavar="YYYY-MM-DD")
+@click.option(
+    "--page-size",
+    type=click.IntRange(1, 300),
+    default=300,
+    show_default=True,
+)
+@_translate_keyring_errors
+def phone_recordings_list(user_id, from_, to, page_size):
+    """TSV: id\\tcaller_number\\tcallee_number\\tdate_time\\tduration."""
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            click.echo("id\tcaller_number\tcallee_number\tdate_time\tduration")
+            for r in phone.list_phone_recordings(
+                client,
+                user_id=user_id,
+                from_=from_,
+                to=to,
+                page_size=page_size,
+            ):
+                click.echo(
+                    f"{r.get('id', '')}\t"
+                    f"{r.get('caller_number', '')}\t"
+                    f"{r.get('callee_number', '')}\t"
+                    f"{r.get('date_time', '')}\t"
+                    f"{r.get('duration', '')}"
+                )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
 
 
 # ---- Zoom Webhooks ------------------------------------------------------
