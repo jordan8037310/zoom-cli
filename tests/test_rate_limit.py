@@ -244,3 +244,24 @@ def test_tier_limits_match_zoom_published_caps() -> None:
     assert TIER_LIMITS[Tier.HEAVY].daily == 60_000
     assert TIER_LIMITS[Tier.RESOURCE_INTENSIVE].per_sec == 20
     assert TIER_LIMITS[Tier.RESOURCE_INTENSIVE].daily == 60_000
+
+
+# ---- #18 Zoom Phone tier mappings --------------------------------------
+
+
+@pytest.mark.parametrize(
+    "method,path,expected",
+    [
+        # Single-resource phone user: LIGHT
+        ("GET", "/phone/users/u-1", Tier.LIGHT),
+        # Phone listings: MEDIUM
+        ("GET", "/phone/users", Tier.MEDIUM),
+        ("GET", "/phone/call_logs", Tier.MEDIUM),
+        ("GET", "/phone/users/u-1/call_logs", Tier.MEDIUM),
+        ("GET", "/phone/call_queues", Tier.MEDIUM),
+        ("GET", "/phone/recordings", Tier.MEDIUM),
+        ("GET", "/phone/users/u-1/recordings", Tier.MEDIUM),
+    ],
+)
+def test_tier_for_classifies_phone_endpoints(method: str, path: str, expected: Tier) -> None:
+    assert tier_for(method, path) == expected

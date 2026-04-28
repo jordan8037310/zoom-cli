@@ -21,7 +21,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Per-tier rate limiting (PR #57): closes #49 (follow-up to #16's partial close). `zoom_cli/api/rate_limit.py` with token-bucket + daily counter + endpoint→tier classification; opt-in via `ApiClient(creds, rate_limiter=RateLimiter())`.
 > Documentation rewrite (PR #58): closes #23. README rewritten around the two-mode reality (local launcher + REST API), full CLI reference, configuration table, security overview; new `examples/` directory with three runnable scripts.
 > Codegen tooling (PR #59): closes #22. New `scripts/codegen.py` wraps `datamodel-code-generator` for Pydantic v2 model generation from Zoom's OpenAPI spec. Optional `[codegen]` extra; output gitignored by default.
-> Webhook receiver (this branch): closes #17. New `zoom webhook serve` command + `zoom_cli/api/webhook.py` with constant-time HMAC verification and the endpoint.url_validation handshake.
+> Webhook receiver (PR #60): closes #17. New `zoom webhook serve` command + `zoom_cli/api/webhook.py` with constant-time HMAC verification and the endpoint.url_validation handshake.
+> Zoom Phone API (this branch): closes #18 (read-only piece). New `zoom phone users / call-logs / queues / recordings list/get` commands; `zoom_cli/api/phone.py`; tier mappings extended for `/phone/*` endpoints.
+
+### Added (issue #18)
+- `zoom_cli/api/phone.py` — `list_phone_users`, `get_phone_user`, `list_call_logs` (account-wide or per-user), `list_call_queues`, `list_phone_recordings` (account-wide or per-user). All paginated via the helper from PR #48; date-filter forwarding for `--from`/`--to` where applicable.
+- CLI subgroups under `zoom phone`:
+  - `zoom phone users list [--page-size]` (TSV: id\\temail\\textension_number\\tstatus)
+  - `zoom phone users get <user-id>` (JSON dump)
+  - `zoom phone call-logs list [--user-id] [--from] [--to] [--page-size]` (TSV: id\\tdirection\\tcaller_number\\tcallee_number\\tstart_time\\tduration)
+  - `zoom phone queues list [--page-size]` (TSV: id\\tname\\textension_number\\tsite_name)
+  - `zoom phone recordings list [--user-id] [--from] [--to] [--page-size]` (TSV: id\\tcaller_number\\tcallee_number\\tdate_time\\tduration)
+- `rate_limit.ENDPOINT_TIERS` extended with `/phone/users`, `/phone/users/{id}`, `/phone/users/{id}/call_logs`, `/phone/users/{id}/recordings`, `/phone/call_logs`, `/phone/call_queues`, `/phone/recordings` — single-resource user lookup is LIGHT, everything else MEDIUM.
 
 ### Added (issue #17)
 - `zoom_cli/api/webhook.py` — pure crypto helpers: `compute_signature(secret_token, timestamp, body)` returns Zoom's `v0=<64-hex>` format; `verify_signature(...)` does constant-time `hmac.compare_digest`; `compute_url_validation_response(secret_token, plain_token)` builds the handshake response. `_make_handler(secret_token, *, sink)` builds a `BaseHTTPRequestHandler` subclass that recognises `endpoint.url_validation` (unsigned by Zoom — special handshake), verifies signed events, rejects tampering with 401 + stderr line, and dumps verified events to the `sink` callable.

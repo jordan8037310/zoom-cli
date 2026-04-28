@@ -2014,3 +2014,140 @@ def test_auth_logout_clears_both_stores(runner: CliRunner) -> None:
 
     assert auth.has_s2s_credentials() is False
     assert auth.has_user_oauth_credentials() is False
+
+
+# ---- #18: zoom phone CLI ------------------------------------------------
+
+
+def _patch_phone_module(monkeypatch: pytest.MonkeyPatch, **funcs):
+    import zoom_cli.__main__ as main_mod
+
+    for name, fn in funcs.items():
+        monkeypatch.setattr(main_mod.phone, name, fn)
+    monkeypatch.setattr(
+        main_mod.oauth, "fetch_access_token", lambda *_a, **_k: _fake_access_token()
+    )
+
+
+def test_phone_users_list_prints_tab_separated(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, *, page_size):
+        return iter(
+            [
+                {
+                    "id": "u1",
+                    "email": "alice@example.com",
+                    "extension_number": "100",
+                    "status": "activate",
+                },
+                {
+                    "id": "u2",
+                    "email": "bob@example.com",
+                    "extension_number": "101",
+                    "status": "deactivate",
+                },
+            ]
+        )
+
+    _patch_phone_module(monkeypatch, list_phone_users=fake_list)
+    result = runner.invoke(main, ["phone", "users", "list"])
+    assert result.exit_code == 0, result.output
+    lines = result.output.strip().split("\n")
+    assert lines[0] == "id\temail\textension_number\tstatus"
+    assert lines[1] == "u1\talice@example.com\t100\tactivate"
+
+
+def test_phone_users_get_prints_json(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    _save_creds()
+
+    def fake_get(_client, user_id):
+        return {"id": user_id, "email": "x@y", "extension_number": "200"}
+
+    _patch_phone_module(monkeypatch, get_phone_user=fake_get)
+    result = runner.invoke(main, ["phone", "users", "get", "u-X"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert parsed["id"] == "u-X"
+
+
+def test_phone_call_logs_list_forwards_filters(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_list(_client, *, user_id, from_, to, page_size):
+        captured.update({"user_id": user_id, "from_": from_, "to": to})
+        return iter([])
+
+    _patch_phone_module(monkeypatch, list_call_logs=fake_list)
+    result = runner.invoke(
+        main,
+        [
+            "phone",
+            "call-logs",
+            "list",
+            "--user-id",
+            "u-X",
+            "--from",
+            "2026-04-01",
+            "--to",
+            "2026-04-30",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured == {"user_id": "u-X", "from_": "2026-04-01", "to": "2026-04-30"}
+
+
+def test_phone_queues_list_prints_tab_separated(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, *, page_size):
+        return iter(
+            [
+                {"id": "q1", "name": "Sales", "extension_number": "200", "site": {"name": "HQ"}},
+            ]
+        )
+
+    _patch_phone_module(monkeypatch, list_call_queues=fake_list)
+    result = runner.invoke(main, ["phone", "queues", "list"])
+    assert result.exit_code == 0, result.output
+    lines = result.output.strip().split("\n")
+    assert lines[0] == "id\tname\textension_number\tsite_name"
+    assert lines[1] == "q1\tSales\t200\tHQ"
+
+
+def test_phone_recordings_list_forwards_filters(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_list(_client, *, user_id, from_, to, page_size):
+        captured.update({"user_id": user_id, "from_": from_, "to": to})
+        return iter([])
+
+    _patch_phone_module(monkeypatch, list_phone_recordings=fake_list)
+    result = runner.invoke(
+        main,
+        [
+            "phone",
+            "recordings",
+            "list",
+            "--user-id",
+            "u-X",
+            "--from",
+            "2026-04-01",
+            "--to",
+            "2026-04-30",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured == {"user_id": "u-X", "from_": "2026-04-01", "to": "2026-04-30"}

@@ -106,6 +106,14 @@ _TIER_RULES: list[tuple[str, re.Pattern[str], Tier]] = [
     ("PATCH", re.compile(r"/meetings/[^/]+"), Tier.MEDIUM),
     # DELETE /meetings/<id>
     ("DELETE", re.compile(r"/meetings/[^/]+"), Tier.MEDIUM),
+    # ---- Zoom Phone (#18) — listings are MEDIUM, single-resource is LIGHT
+    ("GET", re.compile(r"/phone/users/[^/]+/call_logs"), Tier.MEDIUM),
+    ("GET", re.compile(r"/phone/users/[^/]+/recordings"), Tier.MEDIUM),
+    ("GET", re.compile(r"/phone/users/[^/]+"), Tier.LIGHT),
+    ("GET", re.compile(r"/phone/users"), Tier.MEDIUM),
+    ("GET", re.compile(r"/phone/call_logs"), Tier.MEDIUM),
+    ("GET", re.compile(r"/phone/call_queues"), Tier.MEDIUM),
+    ("GET", re.compile(r"/phone/recordings"), Tier.MEDIUM),
 ]
 
 #: Default tier for unmapped endpoints. MEDIUM matches Zoom's most-common
