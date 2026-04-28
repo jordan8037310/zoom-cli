@@ -59,7 +59,7 @@ def test_save_url_via_flags(runner: CliRunner, tmp_zoom_cli_home: Path) -> None:
         ["save", "-n", "standup", "--url", "https://zoom.us/j/1"],
     )
     assert result.exit_code == 0, result.output
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert on_disk == {"standup": {"url": "https://zoom.us/j/1"}}
 
 
@@ -72,7 +72,7 @@ def test_save_id_password_via_flags(runner: CliRunner, tmp_zoom_cli_home: Path) 
         ["save", "-n", "standup", "--id", "1234567890", "-p", "pw"],
     )
     assert result.exit_code == 0, result.output
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert on_disk == {"standup": {"id": "1234567890"}}
     assert secrets.get_password("standup") == "pw"
 
@@ -85,7 +85,7 @@ def test_save_url_does_not_prompt_for_password_when_pwd_in_url(
         ["save", "-n", "standup", "--url", "https://zoom.us/j/1?pwd=abc"],
     )
     assert result.exit_code == 0, result.output
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert on_disk == {"standup": {"url": "https://zoom.us/j/1?pwd=abc"}}
 
 
@@ -97,7 +97,7 @@ def test_rm_with_argument_no_prompt(
     write_meetings({"a": {"id": "1"}, "b": {"id": "2"}})
     result = runner.invoke(main, ["rm", "a"])
     assert result.exit_code == 0, result.output
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert on_disk == {"b": {"id": "2"}}
 
 
@@ -109,7 +109,7 @@ def test_rm_dry_run_does_not_modify_file(
     assert result.exit_code == 0, result.output
     assert "[dry-run]" in result.output
     assert "a" in result.output
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert on_disk == {"a": {"id": "1"}, "b": {"id": "2"}}
 
 
@@ -132,7 +132,7 @@ def test_rm_interactive_dry_run_does_not_confirm_or_delete(
     assert "alpha" in result.output
     assert "Remove meeting" not in result.output  # confirm prompt did NOT fire
 
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert on_disk == {"alpha": {"id": "1"}, "beta": {"id": "2"}}
 
 
@@ -154,7 +154,7 @@ def test_rm_interactive_confirms_before_deleting(
     assert result.exit_code == 0, result.output
     assert "Aborted" in result.output
     # Meeting still present.
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert "a" in on_disk
 
 
@@ -467,7 +467,7 @@ def test_rm_interactive_with_yes_flag_skips_confirmation(
 
     result = runner.invoke(main, ["rm", "--yes"])
     assert result.exit_code == 0, result.output
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert "a" not in on_disk
 
 
@@ -543,7 +543,7 @@ def test_rm_ctrl_c_on_name_select_does_not_crash(
     result = runner.invoke(main, ["rm"])
     assert result.exit_code != 0
     # Existing meetings still present.
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert "a" in on_disk and "b" in on_disk
 
 

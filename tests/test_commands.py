@@ -12,7 +12,7 @@ from zoom_cli import commands as commands_mod
 
 def test_save_url_persists_payload(tmp_zoom_cli_home: Path) -> None:
     commands_mod._save_url("standup", "https://zoom.us/j/1", "")
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert on_disk == {"standup": {"url": "https://zoom.us/j/1"}}
 
 
@@ -22,7 +22,7 @@ def test_save_url_includes_password_when_provided(tmp_zoom_cli_home: Path) -> No
 
     commands_mod._save_url("standup", "https://zoom.us/j/1", "p@ss")
 
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert on_disk == {"standup": {"url": "https://zoom.us/j/1"}}
     assert secrets.get_password("standup") == "p@ss"
 
@@ -32,21 +32,21 @@ def test_save_id_password_persists_payload(tmp_zoom_cli_home: Path) -> None:
 
     commands_mod._save_id_password("standup", "1234567890", "secret")
 
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert on_disk == {"standup": {"id": "1234567890"}}
     assert secrets.get_password("standup") == "secret"
 
 
 def test_save_id_password_omits_password_when_empty(tmp_zoom_cli_home: Path) -> None:
     commands_mod._save_id_password("standup", "1234567890", "")
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert on_disk == {"standup": {"id": "1234567890"}}
 
 
 def test_remove_deletes_entry(write_meetings, tmp_zoom_cli_home: Path) -> None:
     write_meetings({"a": {"id": "1"}, "b": {"id": "2"}})
     commands_mod._remove("a")
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert on_disk == {"b": {"id": "2"}}
 
 
@@ -314,9 +314,9 @@ def test_save_url_keyring_failure_leaves_json_untouched(
     If the keyring write fails, the prior on-disk state is preserved."""
     from zoom_cli import secrets
 
-    # Seed: existing meeting with a known JSON contents.
+    # Seed: existing meeting with a known JSON contents (v1 envelope from #24).
     (tmp_zoom_cli_home / "meetings.json").write_text(
-        '{"standup": {"url": "https://old.example/j/1"}}'
+        '{"schema_version": 1, "meetings": {"standup": {"url": "https://old.example/j/1"}}}'
     )
 
     def boom(*_args, **_kwargs):
@@ -328,7 +328,7 @@ def test_save_url_keyring_failure_leaves_json_untouched(
         commands_mod._save_url("standup", "https://NEW.example/j/2", "newpw")
 
     # JSON must be unchanged — the rewrite never happened.
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert on_disk == {"standup": {"url": "https://old.example/j/1"}}
 
 
@@ -470,7 +470,7 @@ def test_edit_overwrites_url_with_new_answer(
 
     commands_mod._edit("team", "", "", "")
 
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert on_disk == {"team": {"url": "https://new.example/j/2"}}
 
 
@@ -490,7 +490,7 @@ def test_edit_with_password_flag_writes_to_keyring(
 
     commands_mod._edit("team", "", "", "new-pw")
 
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert on_disk == {"team": {"url": "https://new.example/j/2"}}
     assert secrets.get_password("team") == "new-pw"
 
@@ -515,7 +515,7 @@ def test_edit_migrates_legacy_plaintext_password_into_keyring(
 
     commands_mod._edit("team", "", "", "")
 
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     # Legacy password field is gone from JSON — but the value is in the keyring.
     assert on_disk == {"team": {"url": "https://kept.example/j/1"}}
     assert secrets.get_password("team") == "legacy"
@@ -553,7 +553,7 @@ def test_edit_aborts_cleanly_on_ctrl_c(
         commands_mod._edit("team", "", "", "")
 
     # Original entry must be untouched.
-    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())
+    on_disk = json.loads((tmp_zoom_cli_home / "meetings.json").read_text())["meetings"]
     assert on_disk == {"team": {"url": "https://old.example/j/1"}}
 
 

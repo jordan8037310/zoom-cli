@@ -154,12 +154,76 @@ def dict_to_json_string(data) -> str:
     return json.dumps(data, default=dumper, indent=2)
 
 
+#: Current meetings.json schema version. v0 (legacy, pre-#24) was a flat
+#: ``{name: entry}`` dict at the file root. v1 wraps that under a
+#: ``meetings`` key inside an envelope ``{schema_version, meetings}`` so
+#: future versions can add metadata (counters, defaults, format hints)
+#: without colliding with meeting names. Closes #24 schema-versioning.
+SCHEMA_VERSION = 1
+
+
+class UnknownSchemaVersionError(RuntimeError):
+    """The meetings file has a schema_version this CLI doesn't understand.
+
+    Means the file was written by a *newer* CLI than the one currently
+    running. We refuse rather than silently downgrade so we don't strip
+    fields the newer version added.
+    """
+
+    def __init__(self, found_version: int) -> None:
+        super().__init__(
+            f"meetings.json schema_version={found_version} is newer than this "
+            f"CLI supports (max {SCHEMA_VERSION}). Upgrade zoom-cli to read it."
+        )
+        self.found_version = found_version
+
+
+def _detect_envelope(raw: dict) -> tuple[int, dict]:
+    """Return ``(schema_version, meetings_dict)`` from a raw parsed JSON dict.
+
+    Migration policy:
+      - Missing ``schema_version`` → legacy v0 (flat name→entry at root).
+      - ``schema_version == 1`` → read ``meetings`` sub-dict.
+      - ``schema_version > SCHEMA_VERSION`` → :class:`UnknownSchemaVersionError`.
+
+    The migration is *read-only*: we don't write the v1 envelope back
+    until the next mutation. That means a CLI upgrade alone doesn't
+    rewrite the file (no surprise modifications); only the first
+    ``zoom save``/``edit``/``rm`` after upgrade does.
+    """
+    if not raw:
+        # Empty file or {} — treat as v0 with no meetings.
+        return 0, {}
+    if "schema_version" not in raw:
+        # Legacy v0 — the whole dict IS the meetings.
+        return 0, raw
+    version = raw.get("schema_version")
+    if not isinstance(version, int) or version > SCHEMA_VERSION:
+        raise UnknownSchemaVersionError(version if isinstance(version, int) else 0)
+    meetings = raw.get("meetings", {})
+    if not isinstance(meetings, dict):
+        # Corrupt envelope — better to start clean than silently lose data
+        # by assuming an empty meetings dict. Treat as empty.
+        return version, {}
+    return version, meetings
+
+
 def get_meeting_file_contents() -> dict:
+    """Return the flat ``{name: entry}`` dict of saved meetings.
+
+    Transparently handles both schema versions: v0 (pre-#24, flat at
+    root) and v1 (wrapped envelope). The on-disk format isn't changed
+    by this read — see :func:`_detect_envelope` for the policy.
+    """
     try:
         with open(SAVE_FILE_PATH) as file:
-            return json.loads(file.read())
+            raw = json.loads(file.read())
     except (OSError, json.JSONDecodeError):
         return {}
+    if not isinstance(raw, dict):
+        return {}
+    _, meetings = _detect_envelope(raw)
+    return meetings
 
 
 def get_meeting_names() -> list[str]:
@@ -168,6 +232,12 @@ def get_meeting_names() -> list[str]:
 
 def write_to_meeting_file(contents: dict) -> None:
     """Write the meetings JSON atomically and durably.
+
+    Wraps ``contents`` (a flat ``{name: entry}`` dict) in the v1 envelope
+    ``{schema_version, meetings}`` (closes #24 schema-versioning). The
+    first write after a v0→v1 upgrade migrates the file format; readers
+    on older CLI versions will see the new envelope and break (expected
+    — schema versions are explicit upgrade points).
 
     Strategy:
     1. Serialize the new content to a sibling tempfile (created via
@@ -187,7 +257,8 @@ def write_to_meeting_file(contents: dict) -> None:
     cannot corrupt it.
     """
     _ensure_storage()
-    payload = dict_to_json_string(contents)
+    envelope = {"schema_version": SCHEMA_VERSION, "meetings": contents}
+    payload = dict_to_json_string(envelope)
     dir_name = os.path.dirname(SAVE_FILE_PATH) or "."
     fd, tmp_path = tempfile.mkstemp(prefix=".meetings.", suffix=".tmp", dir=dir_name)
     try:

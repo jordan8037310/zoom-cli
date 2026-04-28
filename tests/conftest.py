@@ -98,7 +98,17 @@ def captured_launches(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
 
 
 def _write_meetings(save_file: Path, payload: dict) -> None:
-    save_file.write_text(json.dumps(payload, indent=2))
+    """Write the v1 envelope (closes #24 schema-versioning).
+
+    Most tests just want a flat ``{name: entry}`` payload; this wraps it
+    in the current schema envelope so the fixture matches what the CLI
+    itself writes. Tests that exercise legacy v0 (pre-#24) bypass this
+    fixture and write the raw flat dict directly.
+    """
+    from zoom_cli.utils import SCHEMA_VERSION
+
+    envelope = {"schema_version": SCHEMA_VERSION, "meetings": payload}
+    save_file.write_text(json.dumps(envelope, indent=2))
 
 
 @pytest.fixture
