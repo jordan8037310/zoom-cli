@@ -1290,3 +1290,300 @@ def test_meetings_end_yes_skips_confirmation(
     assert result.exit_code == 0, result.output
     assert captured["meeting_id"] == "12345"
     assert "Ended meeting 12345" in result.output
+
+
+# ---- #14 (write): zoom users create / delete / settings get -------------
+
+
+def _patch_users_module(monkeypatch: pytest.MonkeyPatch, **funcs):
+    import zoom_cli.__main__ as main_mod
+
+    for name, fn in funcs.items():
+        monkeypatch.setattr(main_mod.users, name, fn)
+    monkeypatch.setattr(
+        main_mod.oauth, "fetch_access_token", lambda *_a, **_k: _fake_access_token()
+    )
+
+
+# create
+
+
+def test_users_create_requires_email_and_type(runner: CliRunner) -> None:
+    """--email and --type are required."""
+    result = runner.invoke(main, ["users", "create"])
+    assert result.exit_code != 0
+    result = runner.invoke(main, ["users", "create", "--email", "x@y"])
+    assert result.exit_code != 0
+    result = runner.invoke(main, ["users", "create", "--type", "1"])
+    assert result.exit_code != 0
+
+
+def test_users_create_builds_user_info_and_prints_result(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_create(_client, user_info, *, action):
+        captured["user_info"] = user_info
+        captured["action"] = action
+        return {
+            "id": "new-1",
+            "email": user_info["email"],
+            "type": user_info["type"],
+            "status": "pending",
+            "display_name": user_info.get("display_name", ""),
+        }
+
+    _patch_users_module(monkeypatch, create_user=fake_create)
+
+    result = runner.invoke(
+        main,
+        [
+            "users",
+            "create",
+            "--email",
+            "alice@example.com",
+            "--type",
+            "2",
+            "--first-name",
+            "Alice",
+            "--last-name",
+            "Example",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["action"] == "create"
+    assert captured["user_info"] == {
+        "email": "alice@example.com",
+        "type": 2,
+        "first_name": "Alice",
+        "last_name": "Example",
+    }
+    assert "alice@example.com" in result.output
+
+
+def test_users_create_forwards_action(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_create(_client, user_info, *, action):
+        captured["action"] = action
+        return {"id": "x", "email": user_info["email"]}
+
+    _patch_users_module(monkeypatch, create_user=fake_create)
+    result = runner.invoke(
+        main,
+        ["users", "create", "--email", "x@y", "--type", "1", "--action", "autoCreate"],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["action"] == "autoCreate"
+
+
+def test_users_create_rejects_invalid_type(runner: CliRunner) -> None:
+    """click.IntRange caps at 1..3."""
+    _save_creds()
+    result = runner.invoke(main, ["users", "create", "--email", "x@y", "--type", "9"])
+    assert result.exit_code != 0
+
+
+# delete
+
+
+def test_users_delete_dry_run_does_not_call_api(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    called = {"n": 0}
+
+    def fake_delete(*_a, **_k):
+        called["n"] += 1
+
+    _patch_users_module(monkeypatch, delete_user=fake_delete)
+    result = runner.invoke(main, ["users", "delete", "u-1", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "[dry-run]" in result.output
+    assert "disassociate" in result.output  # default action shown
+    assert called["n"] == 0
+
+
+def test_users_delete_dry_run_shows_transfer_block(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    _patch_users_module(monkeypatch, delete_user=lambda *_a, **_k: None)
+    result = runner.invoke(
+        main,
+        [
+            "users",
+            "delete",
+            "u-1",
+            "--dry-run",
+            "--transfer-email",
+            "boss@example.com",
+            "--transfer-meetings",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "boss@example.com" in result.output
+    assert "meetings=True" in result.output
+
+
+def test_users_delete_default_action_confirms_disassociate(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without --action, prompt phrasing should say 'Disassociate'."""
+    _save_creds()
+    called = {"n": 0}
+
+    def fake_delete(*_a, **_k):
+        called["n"] += 1
+
+    _patch_users_module(monkeypatch, delete_user=fake_delete)
+    # Decline.
+    result = runner.invoke(main, ["users", "delete", "u-1"], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "Disassociate" in result.output
+    assert "Aborted" in result.output
+    assert called["n"] == 0
+
+
+def test_users_delete_action_delete_uses_louder_prompt(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--action delete should warn 'cannot be undone'."""
+    _save_creds()
+    _patch_users_module(monkeypatch, delete_user=lambda *_a, **_k: None)
+    result = runner.invoke(main, ["users", "delete", "u-1", "--action", "delete"], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "Permanently delete" in result.output
+    assert "cannot be undone" in result.output
+
+
+def test_users_delete_yes_skips_confirmation(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_delete(
+        _client,
+        user_id,
+        *,
+        action,
+        transfer_email,
+        transfer_meeting,
+        transfer_recording,
+        transfer_webinar,
+    ):
+        captured.update(
+            {
+                "user_id": user_id,
+                "action": action,
+                "transfer_email": transfer_email,
+                "transfer_meeting": transfer_meeting,
+            }
+        )
+
+    _patch_users_module(monkeypatch, delete_user=fake_delete)
+    result = runner.invoke(main, ["users", "delete", "u-1", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured["user_id"] == "u-1"
+    assert captured["action"] == "disassociate"
+    assert captured["transfer_email"] is None
+    assert captured["transfer_meeting"] is False
+    assert "Disassociated user u-1" in result.output
+
+
+def test_users_delete_action_delete_message(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    _patch_users_module(monkeypatch, delete_user=lambda *_a, **_k: None)
+    result = runner.invoke(main, ["users", "delete", "u-1", "--action", "delete", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "Deleted user u-1" in result.output
+
+
+def test_users_delete_forwards_transfer_flags(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_delete(
+        _client,
+        user_id,
+        *,
+        action,
+        transfer_email,
+        transfer_meeting,
+        transfer_recording,
+        transfer_webinar,
+    ):
+        captured.update(
+            {
+                "transfer_email": transfer_email,
+                "transfer_meeting": transfer_meeting,
+                "transfer_recording": transfer_recording,
+                "transfer_webinar": transfer_webinar,
+            }
+        )
+
+    _patch_users_module(monkeypatch, delete_user=fake_delete)
+    result = runner.invoke(
+        main,
+        [
+            "users",
+            "delete",
+            "u-1",
+            "--yes",
+            "--transfer-email",
+            "boss@example.com",
+            "--transfer-meetings",
+            "--transfer-recordings",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["transfer_email"] == "boss@example.com"
+    assert captured["transfer_meeting"] is True
+    assert captured["transfer_recording"] is True
+    assert captured["transfer_webinar"] is False
+
+
+# settings get
+
+
+def test_users_settings_get_default_me(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_get_settings(_client, user_id):
+        captured["user_id"] = user_id
+        return {"feature": {"meeting_capacity": 100}, "in_meeting": {"chat": True}}
+
+    _patch_users_module(monkeypatch, get_user_settings=fake_get_settings)
+    result = runner.invoke(main, ["users", "settings", "get"])
+    assert result.exit_code == 0, result.output
+    assert captured["user_id"] == "me"
+    # Output is JSON.
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert parsed == {"feature": {"meeting_capacity": 100}, "in_meeting": {"chat": True}}
+
+
+def test_users_settings_get_specific_user(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured = {}
+
+    def fake_get_settings(_client, user_id):
+        captured["user_id"] = user_id
+        return {}
+
+    _patch_users_module(monkeypatch, get_user_settings=fake_get_settings)
+    result = runner.invoke(main, ["users", "settings", "get", "u-42"])
+    assert result.exit_code == 0, result.output
+    assert captured["user_id"] == "u-42"

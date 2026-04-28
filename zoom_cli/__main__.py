@@ -535,6 +535,188 @@ def meetings_list(user_id, meeting_type, page_size):
         _exit_on_api_error(exc)
 
 
+# ---- Zoom Users — write commands + settings ----------------------------
+#
+# Closes #14 (write piece). Confirmation flow:
+#   - `delete <id>` always prompts unless --yes (deleting a user is high-
+#     blast-radius — affects their meetings, recordings, scheduled
+#     invitees). Permanent (`--action delete`) wording is louder than
+#     disassociate.
+#   - `settings get` is read-only; `settings update` is deferred to
+#     follow-up because the field surface is too big to flag-map cleanly.
+
+
+@users_cmd.command("create", help="Create a user (POST /users).")
+@click.option("--email", required=True, help="The new user's email address.")
+@click.option(
+    "--type",
+    "user_type",
+    type=click.IntRange(1, 3),
+    required=True,
+    help="1=Basic, 2=Licensed, 3=On-prem.",
+)
+@click.option("--first-name", help="Given name.")
+@click.option("--last-name", help="Family name.")
+@click.option("--display-name", help="Display name; defaults to first+last.")
+@click.option(
+    "--password",
+    help="Initial password; only honoured with --action autoCreate.",
+)
+@click.option(
+    "--action",
+    type=click.Choice(list(users.ALLOWED_CREATE_ACTIONS)),
+    default="create",
+    show_default=True,
+    help=(
+        "create: invite by email; autoCreate: provision with password; "
+        "custCreate: custom-auth managed; ssoCreate: SSO-managed."
+    ),
+)
+@_translate_keyring_errors
+def users_create(email, user_type, first_name, last_name, display_name, password, action):
+    user_info: dict = {"email": email, "type": user_type}
+    if first_name is not None:
+        user_info["first_name"] = first_name
+    if last_name is not None:
+        user_info["last_name"] = last_name
+    if display_name is not None:
+        user_info["display_name"] = display_name
+    if password is not None:
+        user_info["password"] = password
+
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            created = users.create_user(client, user_info, action=action)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    _print_user_profile(created)
+
+
+@users_cmd.command("delete", help="Delete or disassociate a user (DELETE /users/<user-id>).")
+@click.argument("user_id")
+@click.option(
+    "--action",
+    type=click.Choice(list(users.ALLOWED_DELETE_ACTIONS)),
+    default="disassociate",
+    show_default=True,
+    help=(
+        "disassociate: remove from this account but keep the user's "
+        "Zoom identity; delete: permanent, irreversible."
+    ),
+)
+@click.option(
+    "--transfer-email",
+    help=(
+        "Transfer the user's content to this email before deletion "
+        "(meetings/recordings/webinars per the --transfer-* flags below)."
+    ),
+)
+@click.option(
+    "--transfer-meetings",
+    is_flag=True,
+    default=False,
+    help="Transfer scheduled meetings (only with --transfer-email).",
+)
+@click.option(
+    "--transfer-recordings",
+    is_flag=True,
+    default=False,
+    help="Transfer cloud recordings (only with --transfer-email).",
+)
+@click.option(
+    "--transfer-webinars",
+    is_flag=True,
+    default=False,
+    help="Transfer scheduled webinars (only with --transfer-email).",
+)
+@click.option("--yes", "-y", is_flag=True, default=False, help="Skip the confirmation prompt.")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Show what would happen without calling the API.",
+)
+@_translate_keyring_errors
+def users_delete(
+    user_id,
+    action,
+    transfer_email,
+    transfer_meetings,
+    transfer_recordings,
+    transfer_webinars,
+    yes,
+    dry_run,
+):
+    """Always confirms unless --yes — deleting a user has high blast
+    radius (affects their meetings, recordings, and any invitees)."""
+    if dry_run:
+        click.echo(f"[dry-run] Would {action} user {user_id}")
+        if transfer_email:
+            click.echo(
+                f"[dry-run] transfer to {transfer_email}: "
+                f"meetings={transfer_meetings} "
+                f"recordings={transfer_recordings} "
+                f"webinars={transfer_webinars}"
+            )
+        return
+
+    if not yes:
+        if action == "delete":
+            prompt = f"Permanently delete user {user_id}? This cannot be undone."
+        else:
+            prompt = f"Disassociate user {user_id} from this account?"
+        if not click.confirm(prompt, default=False):
+            click.echo("Aborted.")
+            return
+
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            users.delete_user(
+                client,
+                user_id,
+                action=action,
+                transfer_email=transfer_email,
+                transfer_meeting=transfer_meetings,
+                transfer_recording=transfer_recordings,
+                transfer_webinar=transfer_webinars,
+            )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    verb = "Deleted" if action == "delete" else "Disassociated"
+    click.echo(f"{verb} user {user_id}.")
+
+
+@users_cmd.group("settings", help="Read or update a user's account settings.")
+def users_settings_cmd():
+    """Group for ``zoom users settings ...``. Currently only ``get`` is
+    implemented; ``update`` (PATCH /users/<id>/settings) is deferred to
+    a follow-up — the settings payload has ~50 fields and needs design
+    work to map to flags coherently."""
+
+
+@users_settings_cmd.command(
+    "get",
+    help="Print a user's settings as JSON (GET /users/<user-id>/settings).",
+)
+@click.argument("user_id", default="me", required=False)
+@_translate_keyring_errors
+def users_settings_get(user_id):
+    """Default user is ``me``. Output is the raw JSON payload from
+    Zoom — pipe through ``jq`` for readable output or to extract
+    specific fields."""
+    import json as _json
+
+    creds = _load_creds_or_exit()
+    try:
+        with ApiClient(creds) as client:
+            settings = users.get_user_settings(client, user_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(_json.dumps(settings, indent=2, sort_keys=True))
+
+
 # ---- Zoom Meetings — write commands -------------------------------------
 #
 # Closes #13 (write piece). Confirmation-flow design mirrors `zoom rm`:
