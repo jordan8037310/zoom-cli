@@ -660,3 +660,129 @@ def test_recover_meeting_url_encodes_id() -> None:
     arg = fake_client.put.call_args[0][0]
     assert "/.." not in arg
     assert "%2F" in arg
+
+
+# ---- survey + token + batch register + in-meeting controls -------------
+
+
+def test_get_survey_targets_correct_path() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {"questions": [{"name": "Q1"}]}
+
+    result = meetings.get_survey(fake_client, 123)
+
+    fake_client.get.assert_called_once_with("/meetings/123/survey")
+    assert result["questions"][0]["name"] == "Q1"
+
+
+def test_update_survey_patches_with_payload() -> None:
+    fake_client = MagicMock()
+    fake_client.patch.return_value = {}
+
+    payload = {"questions": [{"name": "Rating", "type": "single"}], "show_in_browser": True}
+    meetings.update_survey(fake_client, 123, payload)
+
+    fake_client.patch.assert_called_once_with("/meetings/123/survey", json=payload)
+
+
+def test_delete_survey_uses_delete() -> None:
+    fake_client = MagicMock()
+    fake_client.delete.return_value = {}
+
+    meetings.delete_survey(fake_client, 123)
+
+    fake_client.delete.assert_called_once_with("/meetings/123/survey")
+
+
+def test_survey_url_encodes_id() -> None:
+    """Cross-cutting: all three survey verbs encode their path segment."""
+    fake_client = MagicMock()
+    fake_client.get.return_value = {}
+    fake_client.patch.return_value = {}
+    fake_client.delete.return_value = {}
+
+    meetings.get_survey(fake_client, "evil/../1")
+    meetings.update_survey(fake_client, "evil/../1", {})
+    meetings.delete_survey(fake_client, "evil/../1")
+
+    for call in (
+        fake_client.get.call_args[0][0],
+        fake_client.patch.call_args[0][0],
+        fake_client.delete.call_args[0][0],
+    ):
+        assert "/.." not in call
+        assert "%2F" in call
+
+
+def test_get_token_default_type_is_zak() -> None:
+    """Zoom defaults the token endpoint to ZAK (the most common: needed
+    to start a meeting on someone's behalf). Keep that as our default."""
+    fake_client = MagicMock()
+    fake_client.get.return_value = {"token": "abc.def.ghi"}
+
+    result = meetings.get_token(fake_client, 123)
+
+    fake_client.get.assert_called_once_with("/meetings/123/token", params={"type": "zak"})
+    assert result["token"] == "abc.def.ghi"
+
+
+def test_get_token_forwards_type_filter() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {"token": "x"}
+
+    meetings.get_token(fake_client, 123, token_type="zpk")
+
+    fake_client.get.assert_called_once_with("/meetings/123/token", params={"type": "zpk"})
+
+
+@pytest.mark.parametrize("bad_type", ["bogus", "", "ZAK", "z a k"])
+def test_get_token_rejects_unknown_type(bad_type: str) -> None:
+    fake_client = MagicMock()
+    with pytest.raises(ValueError, match="token_type"):
+        meetings.get_token(fake_client, 123, token_type=bad_type)
+
+
+def test_allowed_token_types_pinned() -> None:
+    assert "zak" in meetings.ALLOWED_TOKEN_TYPES
+
+
+def test_batch_register_posts_payload() -> None:
+    """Bulk registration: payload contains an array of registrants under
+    the ``registrants`` key. Returns Zoom's bulk response with one
+    join_url per accepted entry."""
+    fake_client = MagicMock()
+    fake_client.post.return_value = {
+        "registrants": [{"email": "a@e.com", "join_url": "https://zoom.us/w/1?tk=A"}]
+    }
+
+    payload = {
+        "auto_approve": True,
+        "registrants_confirmation_email": False,
+        "registrants": [{"email": "a@e.com", "first_name": "A"}],
+    }
+    result = meetings.batch_register(fake_client, 123, payload)
+
+    fake_client.post.assert_called_once_with("/meetings/123/batch_registrants", json=payload)
+    assert result["registrants"][0]["email"] == "a@e.com"
+
+
+def test_in_meeting_control_patches_live_meetings_path() -> None:
+    """In-meeting control sits under /live_meetings (NOT /meetings) —
+    distinct namespace, action verbs like 'invite' / 'mute_participants'."""
+    fake_client = MagicMock()
+    fake_client.patch.return_value = {}
+
+    payload = {"method": "invite", "params": {"contacts": [{"email": "a@e.com"}]}}
+    meetings.in_meeting_control(fake_client, 123, payload)
+
+    fake_client.patch.assert_called_once_with("/live_meetings/123/events", json=payload)
+
+
+def test_in_meeting_control_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.patch.return_value = {}
+
+    meetings.in_meeting_control(fake_client, "evil/../1", {})
+    arg = fake_client.patch.call_args[0][0]
+    assert "/.." not in arg
+    assert "%2F" in arg

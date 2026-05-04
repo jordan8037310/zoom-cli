@@ -36,7 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Meeting registrants surface (PR #72): full registrant management — list / add / approve / deny / cancel / questions get / questions update — under `zoom meetings registrants`. First entry in the depth-first push to bring Meetings from ~15% → ~80% of Zoom's documented surface.
 > Meeting polls surface (PR #73): list / get / create / update / delete plus past-meeting `results` — under `zoom meetings polls`. Second iteration of the depth-first push.
 > Meeting livestream surface (PR #74): get / update RTMP config + start/stop the livestream — under `zoom meetings livestream`. Third iteration of the depth-first push.
-> Past instances + invitation + recover (this branch): `zoom meetings invitation`, `zoom meetings recover`, and a new `zoom meetings past` subgroup with `instances / get / participants`. Fourth iteration of the depth-first push.
+> Past instances + invitation + recover (PR #75): `zoom meetings invitation`, `zoom meetings recover`, and a new `zoom meetings past` subgroup with `instances / get / participants`. Fourth iteration of the depth-first push.
+> Survey + token + batch register + in-meeting controls (this branch): `zoom meetings survey [get/update/delete]`, `zoom meetings token`, `zoom meetings registrants batch`, `zoom meetings control`. Fifth iteration of the depth-first push — closes Meetings to ~80% of Zoom's documented surface.
+
+### Added (post-#13 depth-completion: survey + token + batch + control)
+- `zoom meetings survey get|update|delete <meeting-id>` — manage the post-meeting survey shown to attendees. `update --from-json FILE` (JSON-only because surveys nest deep). All mutating verbs confirm by default; `--yes` to skip.
+- `zoom meetings token <meeting-id> [--type zak|zpk]` — fetch the start-meeting token (sensitive — anyone with it can start the meeting as the host). Default `zak` mirrors Zoom's own default.
+- `zoom meetings registrants batch <meeting-id> --from-json FILE` — bulk-register up to 30 attendees in one call. Returns Zoom's per-attendee join_url array.
+- `zoom meetings control <meeting-id> --from-json FILE` — send an in-meeting control event (invite, mute_participants, etc.). Lives in the `/live_meetings` namespace (NOT `/meetings`) — different scopes apply. Confirms by default since these affect a meeting in progress.
+- New API helpers: `meetings.get_survey`, `meetings.update_survey`, `meetings.delete_survey`, `meetings.get_token` (validated against `ALLOWED_TOKEN_TYPES = ("zak", "zpk")`), `meetings.batch_register`, `meetings.in_meeting_control`.
 
 ### Added (post-#13 depth-completion: past instances + invitation + recover)
 - `zoom meetings invitation <meeting-id>` — print the canonical email invitation text Zoom builds for the meeting.

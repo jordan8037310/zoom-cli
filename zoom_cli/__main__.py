@@ -1956,6 +1956,196 @@ def meetings_past_participants(meeting_id_or_uuid, page_size):
         _exit_on_api_error(exc)
 
 
+# ---- Survey + token + batch register + in-meeting controls -------------
+
+
+@meetings_cmd.group("survey", help="Manage the post-meeting survey shown to attendees.")
+def meetings_survey_cmd():
+    """Group for ``zoom meetings survey ...``."""
+
+
+@meetings_survey_cmd.command(
+    "get", help="Print the survey config as JSON (GET /meetings/<id>/survey)."
+)
+@click.argument("meeting_id")
+@_translate_keyring_errors
+def meetings_survey_get(meeting_id):
+    """JSON output so it round-trips into ``survey update --from-json``."""
+    import json as _json
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            data = meetings.get_survey(client, meeting_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(_json.dumps(data, indent=2))
+
+
+@meetings_survey_cmd.command(
+    "update",
+    help="Replace the survey config (PATCH /meetings/<id>/survey).",
+)
+@click.argument("meeting_id")
+@click.option(
+    "--from-json",
+    "from_json",
+    type=click.File("r", encoding="utf-8"),
+    required=True,
+    help="Read the survey body from a JSON file (or '-' for stdin).",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@_translate_keyring_errors
+def meetings_survey_update(meeting_id, from_json, yes):
+    """Surveys nest deep (questions[]/custom_survey/show_in_browser/
+    third_party_survey) — JSON-only by design. Round-trip via
+    ``survey get`` first."""
+    payload = _load_json_payload_or_exit(from_json, label="--from-json input")
+    if not yes and not click.confirm(f"Replace survey on meeting {meeting_id}?", default=False):
+        click.echo("Aborted.")
+        return
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            meetings.update_survey(client, meeting_id, payload)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Updated survey for meeting {meeting_id}.")
+
+
+@meetings_survey_cmd.command("delete", help="Remove the survey (DELETE /meetings/<id>/survey).")
+@click.argument("meeting_id")
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@_translate_keyring_errors
+def meetings_survey_delete(meeting_id, yes):
+    if not yes and not click.confirm(f"Delete survey on meeting {meeting_id}?", default=False):
+        click.echo("Aborted.")
+        return
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            meetings.delete_survey(client, meeting_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Deleted survey from meeting {meeting_id}.")
+
+
+@meetings_cmd.command(
+    "token",
+    help="Get the start-meeting token (GET /meetings/<id>/token; sensitive).",
+)
+@click.argument("meeting_id")
+@click.option(
+    "--type",
+    "token_type",
+    type=click.Choice(list(meetings.ALLOWED_TOKEN_TYPES)),
+    default="zak",
+    show_default=True,
+    help="Token type. Default zak (start-meeting).",
+)
+@_translate_keyring_errors
+def meetings_token(meeting_id, token_type):
+    """Output is the raw token string. Sensitive — anyone with this
+    can start the meeting as the host. Don't paste into chat / tickets."""
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            data = meetings.get_token(client, meeting_id, token_type=token_type)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(data.get("token", ""))
+
+
+@meetings_registrants_cmd.command(
+    "batch",
+    help="Bulk-register up to 30 attendees (POST /meetings/<id>/batch_registrants).",
+)
+@click.argument("meeting_id")
+@click.option(
+    "--from-json",
+    "from_json",
+    type=click.File("r", encoding="utf-8"),
+    required=True,
+    help=(
+        "JSON file (or '-' for stdin) containing the bulk registration body. "
+        "Required shape: {registrants: [{email, first_name, ...}, ...], "
+        "auto_approve?, registrants_confirmation_email?}."
+    ),
+)
+@_translate_keyring_errors
+def meetings_registrants_batch(meeting_id, from_json):
+    """Returns one accepted entry per registrant with the per-attendee
+    join_url. Useful for "register the whole team in one shot" flows."""
+    import json as _json
+
+    payload = _load_json_payload_or_exit(from_json, label="--from-json input")
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            result = meetings.batch_register(client, meeting_id, payload)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    accepted = result.get("registrants", [])
+    click.echo(f"Registered {len(accepted)} attendee(s).")
+    click.echo(_json.dumps(result, indent=2))
+
+
+@meetings_cmd.command(
+    "control",
+    help="Send an in-meeting control event (PATCH /live_meetings/<id>/events).",
+)
+@click.argument("meeting_id")
+@click.option(
+    "--from-json",
+    "from_json",
+    type=click.File("r", encoding="utf-8"),
+    required=True,
+    help=(
+        "JSON file (or '-' for stdin) with {method, params}. Examples: "
+        '{"method": "invite", "params": {"contacts": [{"email": "a@e.com"}]}} '
+        'or {"method": "mute_participants", "params": {}}.'
+    ),
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@_translate_keyring_errors
+def meetings_control(meeting_id, from_json, yes):
+    """Lives in the /live_meetings namespace (NOT /meetings). Confirms by
+    default since these actions affect a meeting in progress (mute /
+    invite / etc. are user-visible)."""
+    payload = _load_json_payload_or_exit(from_json, label="--from-json input")
+    method = payload.get("method", "<unknown>")
+    if not yes and not click.confirm(
+        f"Send in-meeting control '{method}' to meeting {meeting_id}?", default=False
+    ):
+        click.echo("Aborted.")
+        return
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            meetings.in_meeting_control(client, meeting_id, payload)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Sent in-meeting control '{method}' to meeting {meeting_id}.")
+
+
 # ---- Zoom Cloud Recordings ----------------------------------------------
 #
 # Closes #15. Same confirmation-flow design as `meetings delete`:
