@@ -3174,13 +3174,16 @@ def test_phone_users_list_prints_tab_separated(
 
 
 def test_phone_users_get_prints_json(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    """phone users get is now uniform with the --output flag —
+    JSON requires the explicit ``--output json`` (text mode is default
+    everywhere; PR #82 made this consistent)."""
     _save_creds()
 
     def fake_get(_client, user_id):
         return {"id": user_id, "email": "x@y", "extension_number": "200"}
 
     _patch_phone_module(monkeypatch, get_phone_user=fake_get)
-    result = runner.invoke(main, ["phone", "users", "get", "u-X"])
+    result = runner.invoke(main, ["--output", "json", "phone", "users", "get", "u-X"])
     assert result.exit_code == 0, result.output
     import json as _json
 
@@ -5402,3 +5405,132 @@ def test_output_text_default_is_unchanged(
     # Header still uses the legacy `user_id` name (not `id` from JSON).
     assert lines[0] == "user_id\temail\ttype\tstatus"
     assert lines[1] == "u-1\ta@e.com\t1\tactive"
+
+
+# ---- --output json (phase 3: phone / chat / reports / dashboard) -------
+
+
+def test_output_json_phone_users_list_emits_json_array(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, *, page_size):
+        return iter(
+            [
+                {"id": "p-1", "email": "a@e.com", "extension_number": "200", "status": "activated"},
+            ]
+        )
+
+    _patch_phone_module(monkeypatch, list_phone_users=fake_list)
+    result = runner.invoke(main, ["--output", "json", "phone", "users", "list"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert parsed[0]["id"] == "p-1"
+
+
+def test_output_json_chat_channels_list_emits_json_array(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, *, user_id, page_size):
+        return iter(
+            [
+                {"id": "c-1", "name": "general", "type": 1},
+            ]
+        )
+
+    _patch_chat_module(monkeypatch, list_channels=fake_list)
+    result = runner.invoke(main, ["--output", "json", "chat", "channels", "list"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert parsed[0]["name"] == "general"
+
+
+def test_output_json_reports_meetings_list_emits_json_array(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, *, user_id, from_, to, meeting_type, page_size):
+        return iter(
+            [
+                {
+                    "uuid": "u-1",
+                    "id": 100,
+                    "topic": "T",
+                    "user_email": "a@e.com",
+                    "start_time": "T1",
+                    "duration": 30,
+                    "participants_count": 5,
+                },
+            ]
+        )
+
+    _patch_reports_module(monkeypatch, list_meetings_report=fake_list)
+    result = runner.invoke(
+        main,
+        [
+            "--output",
+            "json",
+            "reports",
+            "meetings",
+            "list",
+            "--from",
+            "2026-04-01",
+            "--to",
+            "2026-04-30",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert parsed[0]["participants_count"] == 5
+
+
+def test_output_json_dashboard_meetings_list_emits_json_array(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, *, type, from_, to, page_size):
+        return iter(
+            [
+                {
+                    "uuid": "u-1",
+                    "id": 100,
+                    "topic": "T",
+                    "host": "Alice",
+                    "participants": 3,
+                    "duration": 30,
+                    "start_time": "T1",
+                },
+            ]
+        )
+
+    _patch_dashboard_module(monkeypatch, list_meetings=fake_list)
+    result = runner.invoke(
+        main,
+        [
+            "--output",
+            "json",
+            "dashboard",
+            "meetings",
+            "list",
+            "--from",
+            "2026-04-01",
+            "--to",
+            "2026-04-30",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert parsed[0]["participants"] == 3
