@@ -1199,18 +1199,17 @@ def users_schedulers_cmd():
     "list", help="List schedulers for a user (GET /users/<user-id>/schedulers)."
 )
 @click.argument("user_id")
+@click.pass_context
 @_translate_keyring_errors
-def users_schedulers_list(user_id):
-    """TSV output (id\\temail)."""
+def users_schedulers_list(ctx, user_id):
+    """TSV (id\\temail) by default; honors ``--output json``."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
             data = users.list_schedulers(client, user_id)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
-    click.echo("id\temail")
-    for s in data.get("schedulers", []):
-        click.echo(f"{s.get('id', '')}\t{s.get('email', '')}")
+    _emit_table(ctx, data.get("schedulers", []), columns=("id", "email"))
 
 
 @users_schedulers_cmd.command(
@@ -1546,21 +1545,18 @@ def users_vb_cmd():
     show_default=True,
     help="Items per page request.",
 )
+@click.pass_context
 @_translate_keyring_errors
-def users_vb_list(user_id, page_size):
-    """TSV output (id\\tname\\ttype\\tsize\\tis_default)."""
+def users_vb_list(ctx, user_id, page_size):
+    """TSV by default; honors ``--output json``."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
-            click.echo("id\tname\ttype\tsize\tis_default")
-            for vb in users.list_virtual_backgrounds(client, user_id, page_size=page_size):
-                click.echo(
-                    f"{vb.get('id', '')}\t"
-                    f"{vb.get('name', '')}\t"
-                    f"{vb.get('type', '')}\t"
-                    f"{vb.get('size', '')}\t"
-                    f"{vb.get('is_default', '')}"
-                )
+            _emit_table(
+                ctx,
+                users.list_virtual_backgrounds(client, user_id, page_size=page_size),
+                columns=("id", "name", "type", "size", "is_default"),
+            )
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
 
@@ -1938,23 +1934,18 @@ def meetings_registrants_cmd():
     show_default=True,
     help="Items per page request.",
 )
+@click.pass_context
 @_translate_keyring_errors
-def meetings_registrants_list(meeting_id, status, page_size):
-    """Output is tab-separated (id\\temail\\tfirst_name\\tlast_name\\tstatus)."""
+def meetings_registrants_list(ctx, meeting_id, status, page_size):
+    """TSV by default; honors ``--output json``."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
-            click.echo("id\temail\tfirst_name\tlast_name\tstatus")
-            for r in meetings.list_registrants(
-                client, meeting_id, status=status, page_size=page_size
-            ):
-                click.echo(
-                    f"{r.get('id', '')}\t"
-                    f"{r.get('email', '')}\t"
-                    f"{r.get('first_name', '')}\t"
-                    f"{r.get('last_name', '')}\t"
-                    f"{r.get('status', '')}"
-                )
+            _emit_table(
+                ctx,
+                meetings.list_registrants(client, meeting_id, status=status, page_size=page_size),
+                columns=("id", "email", "first_name", "last_name", "status"),
+            )
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
 
@@ -2154,23 +2145,17 @@ def meetings_polls_cmd():
 
 @meetings_polls_cmd.command("list", help="List polls on a meeting (GET /meetings/<id>/polls).")
 @click.argument("meeting_id")
+@click.pass_context
 @_translate_keyring_errors
-def meetings_polls_list(meeting_id):
-    """TSV output (id\\ttitle\\tstatus\\tanonymous)."""
+def meetings_polls_list(ctx, meeting_id):
+    """TSV by default; honors ``--output json``."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
             data = meetings.list_polls(client, meeting_id)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
-    click.echo("id\ttitle\tstatus\tanonymous")
-    for p in data.get("polls", []):
-        click.echo(
-            f"{p.get('id', '')}\t"
-            f"{p.get('title', '')}\t"
-            f"{p.get('status', '')}\t"
-            f"{p.get('anonymous', '')}"
-        )
+    _emit_table(ctx, data.get("polls", []), columns=("id", "title", "status", "anonymous"))
 
 
 @meetings_polls_cmd.command(
@@ -2554,19 +2539,19 @@ def meetings_past_cmd():
     help="List past occurrences of a recurring meeting (GET /past_meetings/<id>/instances).",
 )
 @click.argument("meeting_id")
+@click.pass_context
 @_translate_keyring_errors
-def meetings_past_instances(meeting_id):
-    """TSV output (uuid\\tstart_time). The uuid is the handle for
-    ``meetings past get`` and ``meetings past participants``."""
+def meetings_past_instances(ctx, meeting_id):
+    """TSV (uuid\\tstart_time) by default; honors ``--output json``.
+    The uuid is the handle for ``meetings past get`` and
+    ``meetings past participants``."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
             data = meetings.list_past_instances(client, meeting_id)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
-    click.echo("uuid\tstart_time")
-    for inst in data.get("meetings", []):
-        click.echo(f"{inst.get('uuid', '')}\t{inst.get('start_time', '')}")
+    _emit_table(ctx, data.get("meetings", []), columns=("uuid", "start_time"))
 
 
 @meetings_past_cmd.command(
@@ -2574,20 +2559,24 @@ def meetings_past_instances(meeting_id):
     help="Print past-meeting summary (GET /past_meetings/<id-or-uuid>).",
 )
 @click.argument("meeting_id_or_uuid")
+@click.pass_context
 @_translate_keyring_errors
-def meetings_past_get(meeting_id_or_uuid):
+def meetings_past_get(ctx, meeting_id_or_uuid):
     """``meeting_id_or_uuid`` accepts either the numeric meeting ID or a
-    meeting instance UUID (from ``meetings past instances``). Output is
-    one-per-line, same shape as ``meetings get``."""
+    meeting instance UUID (from ``meetings past instances``). Honors
+    ``--output``: text mode prints one-per-line, json mode emits the
+    full envelope."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
             data = meetings.get_past_meeting(client, meeting_id_or_uuid)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
-    for field in ("uuid", "id", "topic", "type", "start_time", "end_time", "duration", "user_name"):
-        if field in data:
-            click.echo(f"{field}: {data[field]}")
+    _emit_object(
+        ctx,
+        data,
+        fields=("uuid", "id", "topic", "type", "start_time", "end_time", "duration", "user_name"),
+    )
 
 
 @meetings_past_cmd.command(
@@ -2602,23 +2591,18 @@ def meetings_past_get(meeting_id_or_uuid):
     show_default=True,
     help="Items per page request.",
 )
+@click.pass_context
 @_translate_keyring_errors
-def meetings_past_participants(meeting_id_or_uuid, page_size):
-    """TSV output (id\\tname\\tuser_email\\tjoin_time\\tleave_time)."""
+def meetings_past_participants(ctx, meeting_id_or_uuid, page_size):
+    """TSV by default; honors ``--output json``."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
-            click.echo("id\tname\tuser_email\tjoin_time\tleave_time")
-            for p in meetings.list_past_participants(
-                client, meeting_id_or_uuid, page_size=page_size
-            ):
-                click.echo(
-                    f"{p.get('id', '')}\t"
-                    f"{p.get('name', '')}\t"
-                    f"{p.get('user_email', '')}\t"
-                    f"{p.get('join_time', '')}\t"
-                    f"{p.get('leave_time', '')}"
-                )
+            _emit_table(
+                ctx,
+                meetings.list_past_participants(client, meeting_id_or_uuid, page_size=page_size),
+                columns=("id", "name", "user_email", "join_time", "leave_time"),
+            )
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
 
@@ -3178,23 +3162,20 @@ def recordings_registrants_cmd():
     show_default=True,
     help="Items per page request.",
 )
+@click.pass_context
 @_translate_keyring_errors
-def recordings_registrants_list(meeting_id, status, page_size):
-    """TSV output (id\\temail\\tfirst_name\\tlast_name\\tstatus)."""
+def recordings_registrants_list(ctx, meeting_id, status, page_size):
+    """TSV by default; honors ``--output json``."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
-            click.echo("id\temail\tfirst_name\tlast_name\tstatus")
-            for r in recordings.list_recording_registrants(
-                client, meeting_id, status=status, page_size=page_size
-            ):
-                click.echo(
-                    f"{r.get('id', '')}\t"
-                    f"{r.get('email', '')}\t"
-                    f"{r.get('first_name', '')}\t"
-                    f"{r.get('last_name', '')}\t"
-                    f"{r.get('status', '')}"
-                )
+            _emit_table(
+                ctx,
+                recordings.list_recording_registrants(
+                    client, meeting_id, status=status, page_size=page_size
+                ),
+                columns=("id", "email", "first_name", "last_name", "status"),
+            )
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
 
@@ -3444,22 +3425,34 @@ def recordings_archive_cmd():
     show_default=True,
     help="Items per page request.",
 )
+@click.pass_context
 @_translate_keyring_errors
-def recordings_archive_list(from_, to, page_size):
-    """TSV output (id\\tmeeting_id\\ttopic\\tarchive_date)."""
+def recordings_archive_list(ctx, from_, to, page_size):
+    """TSV by default; honors ``--output json``.
+
+    Note: text mode falls back to ``start_time`` if ``archive_date`` is
+    missing from the response. JSON mode preserves whichever fields
+    Zoom returned.
+    """
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
-            click.echo("id\tmeeting_id\ttopic\tarchive_date")
-            for af in recordings.list_archive_files(
-                client, from_=from_, to=to, page_size=page_size
-            ):
-                click.echo(
-                    f"{af.get('id', '')}\t"
-                    f"{af.get('meeting_id', '')}\t"
-                    f"{af.get('topic', '')}\t"
-                    f"{af.get('archive_date', af.get('start_time', ''))}"
-                )
+            # Augment text-mode rows with `archive_date` falling back to
+            # `start_time`; JSON mode keeps the raw row shape.
+            def _augmented():
+                for af in recordings.list_archive_files(
+                    client, from_=from_, to=to, page_size=page_size
+                ):
+                    if "archive_date" not in af and "start_time" in af:
+                        yield {**af, "archive_date": af.get("start_time", "")}
+                    else:
+                        yield af
+
+            _emit_table(
+                ctx,
+                _augmented(),
+                columns=("id", "meeting_id", "topic", "archive_date"),
+            )
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
 
