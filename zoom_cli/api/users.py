@@ -193,3 +193,102 @@ def list_users(
         params={"status": status},
         page_size=page_size,
     )
+
+
+# ---- depth-completion: status + password + email + token + permissions --
+
+#: Allowed values for ``update_user_status(action=...)``. Zoom's
+#: PUT /users/<id>/status accepts only these two verbs.
+ALLOWED_STATUS_ACTIONS: tuple[str, ...] = ("activate", "deactivate")
+
+#: Allowed values for ``get_user_token(token_type=...)``. Zoom's
+#: ``type`` query param at /users/<id>/token accepts:
+#: - zak: start-meeting token (most common)
+#: - token: SDK / web embed token
+#: - zpk: host-presence token (legacy)
+ALLOWED_USER_TOKEN_TYPES: tuple[str, ...] = ("zak", "token", "zpk")
+
+
+def update_user_status(client: ApiClient, user_id: str, *, action: str) -> dict[str, Any]:
+    """``PUT /users/{user_id}/status`` — activate or deactivate a user.
+
+    Args:
+        client: Authenticated :class:`ApiClient`.
+        user_id: Zoom user ID or email.
+        action: One of :data:`ALLOWED_STATUS_ACTIONS`.
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``user:write:user:admin`` or admin equivalent.
+    """
+    if action not in ALLOWED_STATUS_ACTIONS:
+        raise ValueError(f"action must be one of {ALLOWED_STATUS_ACTIONS!r}, got {action!r}")
+    return client.put(f"/users/{quote(user_id, safe='')}/status", json={"action": action})
+
+
+def update_user_password(client: ApiClient, user_id: str, *, new_password: str) -> dict[str, Any]:
+    """``PUT /users/{user_id}/password`` — set a new password.
+
+    The CLI should accept ``new_password`` via getpass (interactive
+    masked prompt) — never as a flag (would leak through argv / shell
+    history). The helper takes cleartext because it needs to put it on
+    the wire.
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``user:write:password:admin`` or admin equivalent.
+    """
+    return client.put(
+        f"/users/{quote(user_id, safe='')}/password",
+        json={"password": new_password},
+    )
+
+
+def update_user_email(client: ApiClient, user_id: str, *, new_email: str) -> dict[str, Any]:
+    """``PUT /users/{user_id}/email`` — initiate an email change.
+
+    Zoom sends the new address a confirmation link; the change isn't
+    active until they click. Returns ``{}`` (Zoom responds with 204 No
+    Content) — no indication of confirmation success here.
+
+    Required scopes: ``user:write:email:admin`` or admin equivalent.
+    """
+    return client.put(f"/users/{quote(user_id, safe='')}/email", json={"email": new_email})
+
+
+def get_user_token(
+    client: ApiClient,
+    user_id: str,
+    *,
+    token_type: str = "zak",  # noqa: S107 — "zak" is Zoom's enum value, not a credential
+) -> dict[str, Any]:
+    """``GET /users/{user_id}/token`` — fetch a user-level token.
+
+    Args:
+        client: Authenticated :class:`ApiClient`.
+        user_id: Zoom user ID or email.
+        token_type: One of :data:`ALLOWED_USER_TOKEN_TYPES`. Default
+            ``"zak"`` (start-meeting token).
+
+    Returns ``{token: str}``. The value is sensitive — anyone with a
+    ``zak`` can start the user's meetings as them.
+
+    Required scopes: ``user:read:token:admin``.
+    """
+    if token_type not in ALLOWED_USER_TOKEN_TYPES:
+        raise ValueError(
+            f"token_type must be one of {ALLOWED_USER_TOKEN_TYPES!r}, got {token_type!r}"
+        )
+    return client.get(f"/users/{quote(user_id, safe='')}/token", params={"type": token_type})
+
+
+def get_user_permissions(client: ApiClient, user_id: str) -> dict[str, Any]:
+    """``GET /users/{user_id}/permissions`` — list the user's assigned
+    role + permission set.
+
+    Returns ``{permissions: [str]}`` plus role metadata. Useful for
+    "what can this user do?" audits.
+
+    Required scopes: ``user:read:permission:admin``.
+    """
+    return client.get(f"/users/{quote(user_id, safe='')}/permissions")

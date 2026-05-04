@@ -37,7 +37,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Meeting polls surface (PR #73): list / get / create / update / delete plus past-meeting `results` — under `zoom meetings polls`. Second iteration of the depth-first push.
 > Meeting livestream surface (PR #74): get / update RTMP config + start/stop the livestream — under `zoom meetings livestream`. Third iteration of the depth-first push.
 > Past instances + invitation + recover (PR #75): `zoom meetings invitation`, `zoom meetings recover`, and a new `zoom meetings past` subgroup with `instances / get / participants`. Fourth iteration of the depth-first push.
-> Survey + token + batch register + in-meeting controls (this branch): `zoom meetings survey [get/update/delete]`, `zoom meetings token`, `zoom meetings registrants batch`, `zoom meetings control`. Fifth iteration of the depth-first push — closes Meetings to ~80% of Zoom's documented surface.
+> Survey + token + batch register + in-meeting controls (PR #76): `zoom meetings survey [get/update/delete]`, `zoom meetings token`, `zoom meetings registrants batch`, `zoom meetings control`. Fifth iteration of the depth-first push — closes Meetings to ~80% of Zoom's documented surface.
+> Users status + password + email + token + permissions (this branch): `zoom users [activate|deactivate|password|email|token|permissions]`. First iteration of the Users depth-first push (~25% → target ~80%).
+
+### Added (post-#14 depth-completion: status + password + email + token + permissions)
+- `zoom users activate|deactivate <user-id>` — toggle account status. Confirms by default; `--yes` to skip. Same factory pattern as the meeting registrant status verbs.
+- `zoom users password <user-id>` — reset password. Reads via `getpass.getpass` — never via argv, never via env var. Asks for confirmation (matches the new vs confirm prompt) before sending. Empty / mismatched passwords abort with exit 1.
+- `zoom users email <user-id> <new-email>` — initiate email change. Zoom sends a confirmation link to the new address; the change isn't active until the user clicks. Confirmation prompt surfaces the target email so the operator sees what's about to change.
+- `zoom users token <user-id> [--type zak|token|zpk]` — fetch user-level token. Sensitive — anyone with a `zak` can start the user's meetings as them. Flagged in help text + docstring.
+- `zoom users permissions <user-id>` — list assigned role + permissions; one-per-line.
+- New API helpers: `users.update_user_status` (action validated against `ALLOWED_STATUS_ACTIONS = ("activate", "deactivate")`), `users.update_user_password`, `users.update_user_email`, `users.get_user_token` (validated against `ALLOWED_USER_TOKEN_TYPES = ("zak", "token", "zpk")`), `users.get_user_permissions`.
 
 ### Added (post-#13 depth-completion: survey + token + batch + control)
 - `zoom meetings survey get|update|delete <meeting-id>` — manage the post-meeting survey shown to attendees. `update --from-json FILE` (JSON-only because surveys nest deep). All mutating verbs confirm by default; `--yes` to skip.
