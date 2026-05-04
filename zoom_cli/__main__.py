@@ -90,10 +90,104 @@ def _translate_keyring_errors(func):
     return wrapper
 
 
+#: Global ``--output`` formatter. Carried via the Click context so any
+#: subcommand can call :func:`_emit_table` / :func:`_emit_object` and
+#: get the right shape without each command having to wire up its own
+#: flag. Currently only the read-side commands (list/get/me) consult it
+#: — mutation commands print human-readable status text either way.
+_OUTPUT_FORMATS: tuple[str, ...] = ("text", "json")
+
+
 @click.group(cls=DefaultGroup, default="launch", default_if_no_args=True)
 @click.version_option(__version__)
-def main():
-    pass
+@click.option(
+    "--output",
+    "output_format",
+    type=click.Choice(list(_OUTPUT_FORMATS)),
+    default="text",
+    show_default=True,
+    help=(
+        "Output format for read commands (list / get / me). 'text' is "
+        "the historical TSV / one-per-line output; 'json' emits parseable "
+        "JSON for scripting."
+    ),
+)
+@click.pass_context
+def main(ctx, output_format):
+    ctx.ensure_object(dict)
+    ctx.obj["output"] = output_format
+
+
+def _output_format(ctx) -> str:
+    """Resolve the active ``--output`` value, defaulting to ``text``.
+    Pulled out so commands can call it without knowing about the ctx
+    structure — and so the default-text fallback lives in one place."""
+    obj = getattr(ctx, "obj", None) or {}
+    return obj.get("output", "text")
+
+
+def _emit_table(
+    ctx,
+    rows,
+    *,
+    columns,
+) -> None:
+    """Emit ``rows`` (an iterable of dicts) honoring ``--output``.
+
+    ``columns`` accepts a mix of plain strings (where header == key)
+    and ``(header, key)`` tuples (for legacy TSV column names that
+    differ from the API field name — keeps existing scripts that rely
+    on header text from breaking).
+
+    text mode: TSV with the header row, one record per line — uses
+    the *header* names. Matches the historical CLI shape.
+
+    json mode: collect all rows into a list and emit as a JSON array
+    with the *API key* names (so the JSON mirrors Zoom's response
+    shape and round-trips cleanly into other API calls). Memory
+    behaviour change for paginated lists — acceptable because callers
+    asking for json are going to JSON.parse() the whole thing.
+    """
+    import json as _json
+
+    normalized: list[tuple[str, str]] = [
+        (c, c) if isinstance(c, str) else (c[0], c[1]) for c in columns
+    ]
+    fmt = _output_format(ctx)
+    if fmt == "json":
+        click.echo(
+            _json.dumps([{key: r.get(key, "") for _, key in normalized} for r in rows], indent=2)
+        )
+        return
+    click.echo("\t".join(h for h, _ in normalized))
+    for r in rows:
+        click.echo("\t".join(str(r.get(k, "")) for _, k in normalized))
+
+
+def _emit_object(
+    ctx,
+    obj: dict,
+    *,
+    fields: tuple[str, ...] | None = None,
+) -> None:
+    """Emit a single object honoring ``--output``.
+
+    text mode: print one ``field: value`` line per ``field`` in
+    ``fields`` (or all top-level keys if ``fields is None``).
+
+    json mode: emit the whole object as JSON (no field filtering — give
+    callers the full shape they need to script around).
+    """
+    import json as _json
+
+    fmt = _output_format(ctx)
+    if fmt == "json":
+        click.echo(_json.dumps(obj, indent=2))
+        return
+    keys = fields if fields is not None else tuple(obj.keys())
+    for k in keys:
+        if k in obj:
+            click.echo(f"{k}: {obj[k]}")
 
 
 @main.command(help="Launch meeting [url or saved meeting name]")
@@ -508,31 +602,31 @@ def _exit_on_api_error(exc: Exception) -> None:
 
 
 @users_cmd.command("me", help="Print the authenticated user's profile (GET /users/me).")
+@click.pass_context
 @_translate_keyring_errors
-def users_me():
+def users_me(ctx):
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
             profile = users.get_me(client)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
-    _print_user_profile(profile)
+    _emit_object(ctx, profile, fields=_USER_PROFILE_FIELDS)
 
 
 @users_cmd.command("get", help="Print a specific user's profile (GET /users/<user-id>).")
 @click.argument("user_id")
+@click.pass_context
 @_translate_keyring_errors
-def users_get(user_id):
-    """``user_id`` is either a Zoom user ID or an email address. Closes #14
-    (read-only piece) — write commands (create/delete/settings) are a
-    follow-up that needs separate confirmation-flow design."""
+def users_get(ctx, user_id):
+    """``user_id`` is either a Zoom user ID or an email address."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
             profile = users.get_user(client, user_id)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
-    _print_user_profile(profile)
+    _emit_object(ctx, profile, fields=_USER_PROFILE_FIELDS)
 
 
 @users_cmd.command("list", help="List users in the account (paginates GET /users).")
@@ -550,25 +644,22 @@ def users_get(user_id):
     show_default=True,
     help="Items per page request (Zoom caps `/users` at 300).",
 )
+@click.pass_context
 @_translate_keyring_errors
-def users_list(status, page_size):
-    """Output is tab-separated (id\\temail\\ttype\\tstatus) so it pipes into
-    ``cut``/``awk``/``column``. Pagination is handled transparently;
-    multi-page accounts may take a few seconds.
-
-    Closes #14 (read-only piece) — uses the ``paginate()`` helper from
-    PR #48 / issue #16."""
+def users_list(ctx, status, page_size):
+    """Output is TSV by default (id\\temail\\ttype\\tstatus); use the
+    global ``--output json`` flag for parseable output. Pagination is
+    handled transparently."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
-            click.echo("user_id\temail\ttype\tstatus")
-            for user in users.list_users(client, status=status, page_size=page_size):
-                click.echo(
-                    f"{user.get('id', '')}\t"
-                    f"{user.get('email', '')}\t"
-                    f"{user.get('type', '')}\t"
-                    f"{user.get('status', '')}"
-                )
+            # Header is `user_id` (legacy CLI convention) but the row
+            # field is `id` — see _emit_table column-tuple form.
+            _emit_table(
+                ctx,
+                users.list_users(client, status=status, page_size=page_size),
+                columns=(("user_id", "id"), "email", "type", "status"),
+            )
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
 
@@ -607,18 +698,17 @@ def _print_meeting_detail(meeting: dict) -> None:
 
 @meetings_cmd.command("get", help="Print one meeting's details (GET /meetings/<meeting-id>).")
 @click.argument("meeting_id")
+@click.pass_context
 @_translate_keyring_errors
-def meetings_get(meeting_id):
-    """``meeting_id`` is the numeric Zoom meeting ID. Closes #13 (read-only
-    piece) — write commands (create / update / delete / end) are a follow-up
-    that needs separate confirmation-flow design."""
+def meetings_get(ctx, meeting_id):
+    """``meeting_id`` is the numeric Zoom meeting ID."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
             meeting = meetings.get_meeting(client, meeting_id)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
-    _print_meeting_detail(meeting)
+    _emit_object(ctx, meeting, fields=_MEETING_DETAIL_FIELDS)
 
 
 @meetings_cmd.command(
@@ -645,28 +735,25 @@ def meetings_get(meeting_id):
     show_default=True,
     help="Items per page request (Zoom caps `/users/{userId}/meetings` at 300).",
 )
+@click.pass_context
 @_translate_keyring_errors
-def meetings_list(user_id, meeting_type, page_size):
-    """Output is tab-separated (id\\ttopic\\ttype\\tstart_time\\tduration) so
-    it pipes into cut/awk/column. Pagination is handled transparently
-    (PR #48 / #16). Closes #13 (read-only piece)."""
+def meetings_list(ctx, user_id, meeting_type, page_size):
+    """Output is TSV by default (id\\ttopic\\ttype\\tstart_time\\tduration);
+    use the global ``--output json`` flag for parseable output. Pagination
+    is handled transparently."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
-            click.echo("id\ttopic\ttype\tstart_time\tduration")
-            for meeting in meetings.list_meetings(
-                client,
-                user_id=user_id,
-                meeting_type=meeting_type,
-                page_size=page_size,
-            ):
-                click.echo(
-                    f"{meeting.get('id', '')}\t"
-                    f"{meeting.get('topic', '')}\t"
-                    f"{meeting.get('type', '')}\t"
-                    f"{meeting.get('start_time', '')}\t"
-                    f"{meeting.get('duration', '')}"
-                )
+            _emit_table(
+                ctx,
+                meetings.list_meetings(
+                    client,
+                    user_id=user_id,
+                    meeting_type=meeting_type,
+                    page_size=page_size,
+                ),
+                columns=("id", "topic", "type", "start_time", "duration"),
+            )
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
 
@@ -2768,28 +2855,41 @@ def recordings_cmd():
     show_default=True,
     help="Items per page request.",
 )
+@click.pass_context
 @_translate_keyring_errors
-def recordings_list(user_id, from_, to, page_size):
-    """Output is tab-separated (uuid\\tmeeting_id\\ttopic\\tstart_time\\tfile_count)
-    so it pipes into cut/awk/column."""
+def recordings_list(ctx, user_id, from_, to, page_size):
+    """Output is TSV by default (uuid\\tmeeting_id\\ttopic\\tstart_time\\tfile_count);
+    use the global ``--output json`` flag for parseable output."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
-            click.echo("uuid\tmeeting_id\ttopic\tstart_time\tfile_count")
-            for meeting in recordings.list_recordings(
-                client,
-                user_id=user_id,
-                from_=from_,
-                to=to,
-                page_size=page_size,
-            ):
-                click.echo(
-                    f"{meeting.get('uuid', '')}\t"
-                    f"{meeting.get('id', '')}\t"
-                    f"{meeting.get('topic', '')}\t"
-                    f"{meeting.get('start_time', '')}\t"
-                    f"{len(meeting.get('recording_files', []))}"
-                )
+            # `meeting_id` (header) maps to `id` (Zoom field). file_count
+            # is computed per-row — not a Zoom field — so the helper sees
+            # it materialized into the dict before reaching the helper.
+            def _augmented():
+                for m in recordings.list_recordings(
+                    client,
+                    user_id=user_id,
+                    from_=from_,
+                    to=to,
+                    page_size=page_size,
+                ):
+                    yield {
+                        **m,
+                        "file_count": len(m.get("recording_files", [])),
+                    }
+
+            _emit_table(
+                ctx,
+                _augmented(),
+                columns=(
+                    "uuid",
+                    ("meeting_id", "id"),
+                    "topic",
+                    "start_time",
+                    "file_count",
+                ),
+            )
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
 

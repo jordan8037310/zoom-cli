@@ -42,7 +42,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Users schedulers + assistants + presence (PR #78): `zoom users schedulers [list|delete]`, `zoom users assistants [add|delete]`, `zoom users presence [get|set]`. Second iteration of the Users depth-first push.
 > Recordings recover + settings + registrants (PR #79): `zoom recordings recover`, `zoom recordings settings [get|update]`, `zoom recordings registrants [list|add|approve|deny]`. First iteration of the Recordings depth-first push (~25% → target ~80%).
 > Recordings analytics + registrant questions + archive (PR #80): `zoom recordings analytics [summary|details]`, `zoom recordings registrants questions [get|update]`, `zoom recordings archive [list|get|delete]`. Second iteration — closes Recordings to ~80%.
-> Users update + revoke-sso + virtual-backgrounds list/delete (this branch): `zoom users update`, `zoom users revoke-sso`, `zoom users virtual-backgrounds [list|delete]`. Third iteration of the Users depth-first push — closes Users to ~80% (multipart-upload for VB upload deferred as a separate iter).
+> Users update + revoke-sso + virtual-backgrounds list/delete (PR #81): `zoom users update`, `zoom users revoke-sso`, `zoom users virtual-backgrounds [list|delete]`. Third iteration of the Users depth-first push — closes Users to ~80% (multipart-upload for VB upload deferred as a separate iter).
+> Cross-cutting `--output [text|json]` flag (this branch): global formatter consulted by read-side commands (list / get / me). Closes the scriptability gap from the parity audit. First wave converts users / meetings / recordings list and get; subsequent iterations migrate the rest.
+
+### Added (cross-cutting: --output json)
+- New global `--output [text|json]` flag on the `zoom` command. `text` (default) preserves the historical TSV / one-per-line shape; `json` emits parseable JSON for scripting.
+- Helpers `_emit_table` and `_emit_object` honor the active `--output`. Text mode TSV header text stays aligned with the legacy CLI contract (e.g. `user_id` for `users list`); JSON mode uses Zoom's API field names so payloads round-trip cleanly into other API calls.
+- Converted commands (this iter): `zoom users me`, `zoom users get`, `zoom users list`, `zoom meetings get`, `zoom meetings list`, `zoom recordings list`. Mutation commands (create / update / delete / etc.) keep their existing human-readable status text either way — JSON mode is read-side only.
+- Future iterations migrate the remaining read commands (`recordings get` already prints JSON natively; `phone *`, `chat *`, `reports *`, `dashboard *` list/get commands are next).
 
 ### Added (post-#14 depth-completion: update + sso revoke + virtual backgrounds)
 - `zoom users update <user-id>` — partial profile update (PATCH /users/<id>). Per-field flags (`--first-name`, `--last-name`, `--type`, `--language`, `--dept`, `--vanity-name`) OR `--from-json FILE`; mutually exclusive. Rejects empty payload.
