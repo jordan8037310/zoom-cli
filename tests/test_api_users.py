@@ -538,3 +538,96 @@ def test_allowed_presence_statuses_pinned() -> None:
     assert "Available" in users.ALLOWED_PRESENCE_STATUSES
     assert "Away" in users.ALLOWED_PRESENCE_STATUSES
     assert "Do_Not_Disturb" in users.ALLOWED_PRESENCE_STATUSES
+
+
+# ---- depth-completion: update_user + SSO revoke + virtual backgrounds --
+
+
+def test_update_user_patches_user_path() -> None:
+    """PATCH /users/<id> — partial update on the user profile."""
+    fake_client = MagicMock()
+    fake_client.patch.return_value = {}
+
+    payload = {"first_name": "Alice", "last_name": "Smith", "language": "en-US"}
+    users.update_user(fake_client, "u-1", payload)
+
+    fake_client.patch.assert_called_once_with("/users/u-1", json=payload)
+
+
+def test_update_user_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.patch.return_value = {}
+    users.update_user(fake_client, "evil/../1", {})
+    arg = fake_client.patch.call_args[0][0]
+    assert "/.." not in arg
+    assert "%2F" in arg
+
+
+def test_revoke_sso_token_targets_correct_path() -> None:
+    """PUT /users/<id>/sso_token — invalidates all active SSO sessions."""
+    fake_client = MagicMock()
+    fake_client.put.return_value = {}
+
+    users.revoke_sso_token(fake_client, "u-1")
+
+    fake_client.put.assert_called_once_with("/users/u-1/sso_token")
+
+
+def test_revoke_sso_token_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.put.return_value = {}
+    users.revoke_sso_token(fake_client, "evil/../1")
+    arg = fake_client.put.call_args[0][0]
+    assert "/.." not in arg
+    assert "%2F" in arg
+
+
+def test_list_virtual_backgrounds_walks_pagination() -> None:
+    fake_client = MagicMock()
+    fake_client.get.side_effect = [
+        {"files": [{"id": "vb-1"}, {"id": "vb-2"}], "next_page_token": "tok-2"},
+        {"files": [{"id": "vb-3"}], "next_page_token": ""},
+    ]
+
+    result = list(users.list_virtual_backgrounds(fake_client, "u-1"))
+
+    assert result == [{"id": "vb-1"}, {"id": "vb-2"}, {"id": "vb-3"}]
+    first = fake_client.get.call_args_list[0]
+    assert first[0][0] == "/users/u-1/settings/virtual_backgrounds"
+
+
+def test_list_virtual_backgrounds_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {"files": [], "next_page_token": ""}
+    list(users.list_virtual_backgrounds(fake_client, "evil/../1"))
+    call_path = fake_client.get.call_args_list[0][0][0]
+    assert "/.." not in call_path
+    assert "%2F" in call_path
+
+
+def test_delete_virtual_backgrounds_passes_ids_csv_param() -> None:
+    """Zoom takes a comma-separated `ids` query param — the helper builds it."""
+    fake_client = MagicMock()
+    fake_client.delete.return_value = {}
+
+    users.delete_virtual_backgrounds(fake_client, "u-1", ids=["vb-1", "vb-2"])
+
+    fake_client.delete.assert_called_once_with(
+        "/users/u-1/settings/virtual_backgrounds",
+        params={"ids": "vb-1,vb-2"},
+    )
+
+
+def test_delete_virtual_backgrounds_rejects_empty_ids() -> None:
+    fake_client = MagicMock()
+    with pytest.raises(ValueError, match="at least one"):
+        users.delete_virtual_backgrounds(fake_client, "u-1", ids=[])
+
+
+def test_delete_virtual_backgrounds_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.delete.return_value = {}
+    users.delete_virtual_backgrounds(fake_client, "evil/../1", ids=["vb-1"])
+    arg = fake_client.delete.call_args[0][0]
+    assert "/.." not in arg
+    assert "%2F" in arg

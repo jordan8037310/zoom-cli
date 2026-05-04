@@ -5038,3 +5038,205 @@ def test_recordings_archive_delete_confirms_and_aborts(
     assert "no recover step" in result.output
     assert "Aborted" in result.output
     assert called["n"] == 0
+
+
+# ---- users depth-completion: update / revoke-sso / virtual-backgrounds --
+
+
+def test_users_update_field_flags_build_payload(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_update(_client, user_id, payload):
+        captured["user_id"] = user_id
+        captured["payload"] = payload
+
+    _patch_users_module(monkeypatch, update_user=fake_update)
+    result = runner.invoke(
+        main,
+        [
+            "users",
+            "update",
+            "u-1",
+            "--first-name",
+            "Alice",
+            "--last-name",
+            "Smith",
+            "--type",
+            "2",
+            "--language",
+            "en-US",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["user_id"] == "u-1"
+    assert captured["payload"] == {
+        "first_name": "Alice",
+        "last_name": "Smith",
+        "type": 2,
+        "language": "en-US",
+    }
+    assert "Updated user u-1" in result.output
+
+
+def test_users_update_rejects_no_fields(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    _save_creds()
+    _patch_users_module(monkeypatch, update_user=lambda *_a, **_k: None)
+    result = runner.invoke(main, ["users", "update", "u-1"])
+    assert result.exit_code == 1
+    assert "Nothing to update" in result.output
+
+
+def test_users_update_from_json_mutually_exclusive(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "u.json"
+    json_file.write_text('{"first_name": "Alice"}')
+    _patch_users_module(monkeypatch, update_user=lambda *_a, **_k: None)
+    result = runner.invoke(
+        main,
+        [
+            "users",
+            "update",
+            "u-1",
+            "--from-json",
+            str(json_file),
+            "--first-name",
+            "Bob",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "mutually exclusive" in result.output
+
+
+def test_users_update_from_json_sends_full_payload(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "u.json"
+    json_file.write_text('{"first_name": "Alice", "vanity_name": "alice-room"}')
+    captured: dict[str, object] = {}
+
+    def fake_update(_client, _uid, payload):
+        captured["payload"] = payload
+
+    _patch_users_module(monkeypatch, update_user=fake_update)
+    result = runner.invoke(main, ["users", "update", "u-1", "--from-json", str(json_file)])
+    assert result.exit_code == 0, result.output
+    assert captured["payload"] == {
+        "first_name": "Alice",
+        "vanity_name": "alice-room",
+    }
+
+
+def test_users_revoke_sso_yes_calls_api(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_revoke(_client, user_id):
+        captured["user_id"] = user_id
+
+    _patch_users_module(monkeypatch, revoke_sso_token=fake_revoke)
+    result = runner.invoke(main, ["users", "revoke-sso", "u-1", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured["user_id"] == "u-1"
+    assert "Revoked SSO sessions" in result.output
+
+
+def test_users_revoke_sso_confirms_and_aborts(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    called = {"n": 0}
+    _patch_users_module(
+        monkeypatch,
+        revoke_sso_token=lambda *_a, **_k: called.__setitem__("n", called["n"] + 1),
+    )
+    result = runner.invoke(main, ["users", "revoke-sso", "u-1"], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    assert called["n"] == 0
+
+
+def test_users_vb_list_prints_tsv(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    _save_creds()
+
+    def fake_list(_client, user_id, *, page_size):
+        assert user_id == "u-1"
+        return iter(
+            [
+                {
+                    "id": "vb-1",
+                    "name": "office.jpg",
+                    "type": "image",
+                    "size": 12345,
+                    "is_default": True,
+                },
+                {
+                    "id": "vb-2",
+                    "name": "blur.mp4",
+                    "type": "video",
+                    "size": 98765,
+                    "is_default": False,
+                },
+            ]
+        )
+
+    _patch_users_module(monkeypatch, list_virtual_backgrounds=fake_list)
+    result = runner.invoke(main, ["users", "virtual-backgrounds", "list", "u-1"])
+    assert result.exit_code == 0, result.output
+    assert "id\tname\ttype\tsize\tis_default" in result.output
+    assert "vb-1\toffice.jpg\timage\t12345\tTrue" in result.output
+
+
+def test_users_vb_delete_yes_sends_csv_ids(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_delete(_client, user_id, *, ids):
+        captured["user_id"] = user_id
+        captured["ids"] = list(ids)
+
+    _patch_users_module(monkeypatch, delete_virtual_backgrounds=fake_delete)
+    result = runner.invoke(
+        main,
+        [
+            "users",
+            "virtual-backgrounds",
+            "delete",
+            "u-1",
+            "--id",
+            "vb-1",
+            "--id",
+            "vb-2",
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["user_id"] == "u-1"
+    assert captured["ids"] == ["vb-1", "vb-2"]
+    assert "Deleted 2 virtual background(s)" in result.output
+
+
+def test_users_vb_delete_confirms_and_aborts(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    called = {"n": 0}
+    _patch_users_module(
+        monkeypatch,
+        delete_virtual_backgrounds=lambda *_a, **_k: called.__setitem__("n", called["n"] + 1),
+    )
+    result = runner.invoke(
+        main,
+        ["users", "virtual-backgrounds", "delete", "u-1", "--id", "vb-1"],
+        input="n\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    assert called["n"] == 0
