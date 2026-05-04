@@ -1642,6 +1642,191 @@ def meetings_polls_results(meeting_id):
     click.echo(_json.dumps(data, indent=2))
 
 
+# ---- Meeting livestream (depth-completion follow-up to #13) ------------
+
+
+@meetings_cmd.group("livestream", help="Configure and start/stop a meeting's RTMP livestream.")
+def meetings_livestream_cmd():
+    """Group for ``zoom meetings livestream ...``."""
+
+
+@meetings_livestream_cmd.command(
+    "get", help="Print livestream config (GET /meetings/<id>/livestream)."
+)
+@click.argument("meeting_id")
+@_translate_keyring_errors
+def meetings_livestream_get(meeting_id):
+    """Output is one-per-line. ``stream_key`` is the secret half — anyone
+    with it can push video to the destination, so redact when sharing."""
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            data = meetings.get_livestream(client, meeting_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    for field in ("stream_url", "stream_key", "page_url", "resolution"):
+        if field in data:
+            click.echo(f"{field}: {data[field]}")
+
+
+@meetings_livestream_cmd.command(
+    "update",
+    help="Set livestream config (PATCH /meetings/<id>/livestream).",
+)
+@click.argument("meeting_id")
+@click.option(
+    "--from-json",
+    "from_json",
+    type=click.File("r", encoding="utf-8"),
+    default=None,
+    help=(
+        "Read the full livestream body from a JSON file (or '-' for "
+        "stdin). Mutually exclusive with --stream-url / --stream-key / "
+        "--page-url."
+    ),
+)
+@click.option("--stream-url", help="RTMP destination URL (e.g. rtmp://example.com/live).")
+@click.option("--stream-key", help="RTMP stream key (sensitive — pass via env or stdin).")
+@click.option("--page-url", help="Public viewer page (HTTPS).")
+@_translate_keyring_errors
+def meetings_livestream_update(meeting_id, from_json, stream_url, stream_key, page_url):
+    """Two payload-construction modes (mirrors the rest of the CLI):
+
+    1. Per-field flags — at least one of the three must be passed.
+    2. ``--from-json FILE`` — full Zoom livestream body.
+    """
+    field_flags = (stream_url, stream_key, page_url)
+    any_field_flag = any(f is not None for f in field_flags)
+
+    if from_json is not None:
+        if any_field_flag:
+            click.echo(
+                "--from-json is mutually exclusive with --stream-url / --stream-key / --page-url.",
+                err=True,
+            )
+            raise click.exceptions.Exit(code=1)
+        payload = _load_json_payload_or_exit(from_json, label="--from-json input")
+    else:
+        payload = {}
+        if stream_url is not None:
+            payload["stream_url"] = stream_url
+        if stream_key is not None:
+            payload["stream_key"] = stream_key
+        if page_url is not None:
+            payload["page_url"] = page_url
+        if not payload:
+            click.echo(
+                "Nothing to update — pass at least one of --stream-url / "
+                "--stream-key / --page-url, or use --from-json.",
+                err=True,
+            )
+            raise click.exceptions.Exit(code=1)
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            meetings.update_livestream(client, meeting_id, payload)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Updated livestream config for meeting {meeting_id}.")
+
+
+@meetings_livestream_cmd.command(
+    "start",
+    help="Start the livestream (PATCH /meetings/<id>/livestream/status, action=start).",
+)
+@click.argument("meeting_id")
+@click.option(
+    "--display-name",
+    help="Banner overlay shown on the stream.",
+)
+@click.option(
+    "--active-speaker-name/--no-active-speaker-name",
+    "active_speaker_name",
+    default=None,
+    help="Show the active speaker's name on the stream.",
+)
+@click.option(
+    "--from-json",
+    "from_json",
+    type=click.File("r", encoding="utf-8"),
+    default=None,
+    help=(
+        "Read the broadcast settings sub-object from JSON. Mutually "
+        "exclusive with --display-name / --active-speaker-name."
+    ),
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@_translate_keyring_errors
+def meetings_livestream_start(meeting_id, display_name, active_speaker_name, from_json, yes):
+    """Starting the livestream pushes the meeting to the configured RTMP
+    destination — visible to anyone with the page URL. Confirms by
+    default."""
+    field_flags = (display_name, active_speaker_name)
+    any_field_flag = any(f is not None for f in field_flags)
+
+    if from_json is not None:
+        if any_field_flag:
+            click.echo(
+                "--from-json is mutually exclusive with --display-name / --active-speaker-name.",
+                err=True,
+            )
+            raise click.exceptions.Exit(code=1)
+        settings = _load_json_payload_or_exit(from_json, label="--from-json input")
+    else:
+        settings = {}
+        if display_name is not None:
+            settings["display_name"] = display_name
+        if active_speaker_name is not None:
+            settings["active_speaker_name"] = active_speaker_name
+
+    if not yes and not click.confirm(f"Start livestream on meeting {meeting_id}?", default=False):
+        click.echo("Aborted.")
+        return
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            meetings.update_livestream_status(
+                client, meeting_id, action="start", settings=settings or None
+            )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Started livestream on meeting {meeting_id}.")
+
+
+@meetings_livestream_cmd.command(
+    "stop",
+    help="Stop the livestream (PATCH /meetings/<id>/livestream/status, action=stop).",
+)
+@click.argument("meeting_id")
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@_translate_keyring_errors
+def meetings_livestream_stop(meeting_id, yes):
+    if not yes and not click.confirm(f"Stop livestream on meeting {meeting_id}?", default=False):
+        click.echo("Aborted.")
+        return
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            meetings.update_livestream_status(client, meeting_id, action="stop")
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Stopped livestream on meeting {meeting_id}.")
+
+
 # ---- Zoom Cloud Recordings ----------------------------------------------
 #
 # Closes #15. Same confirmation-flow design as `meetings delete`:

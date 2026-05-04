@@ -34,7 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Codegen `--from-url` (this branch): scripts/codegen.py can now fetch the OpenAPI spec directly instead of requiring a separate `curl` step.
 > Meetings create/update `--from-json` (this branch): `zoom meetings create` and `zoom meetings update` now accept a `--from-json FILE` (or `-` for stdin) payload-construction mode. Mutually exclusive with the per-field flags. Use this for `recurrence` and `settings` sub-objects that the field flags don't expose.
 > Meeting registrants surface (PR #72): full registrant management — list / add / approve / deny / cancel / questions get / questions update — under `zoom meetings registrants`. First entry in the depth-first push to bring Meetings from ~15% → ~80% of Zoom's documented surface.
-> Meeting polls surface (this branch): list / get / create / update / delete plus past-meeting `results` — under `zoom meetings polls`. Second iteration of the depth-first push.
+> Meeting polls surface (PR #73): list / get / create / update / delete plus past-meeting `results` — under `zoom meetings polls`. Second iteration of the depth-first push.
+> Meeting livestream surface (this branch): get / update RTMP config + start/stop the livestream — under `zoom meetings livestream`. Third iteration of the depth-first push.
+
+### Added (post-#13 depth-completion: livestream)
+- `zoom meetings livestream get <meeting-id>` — print RTMP config (stream_url / stream_key / page_url / resolution) one-per-line.
+- `zoom meetings livestream update <meeting-id> [--stream-url URL] [--stream-key K] [--page-url URL]` — partial PATCH; rejects empty payload. `--from-json FILE` accepts the full body and is mutually exclusive with the per-field flags.
+- `zoom meetings livestream start <meeting-id> [--display-name N] [--active-speaker-name/--no-active-speaker-name] [--from-json FILE]` — confirms by default; `--yes` to skip. Builds the broadcast settings sub-object from flags or accepts the full sub-object as JSON.
+- `zoom meetings livestream stop <meeting-id>` — confirms by default; `--yes` to skip. Sends `action=stop` with no settings sub-object.
+- New API helpers: `meetings.get_livestream`, `meetings.update_livestream`, `meetings.update_livestream_status` (action validated against `ALLOWED_LIVESTREAM_ACTIONS = ("start", "stop")`).
 
 ### Added (post-#13 depth-completion: polls)
 - `zoom meetings polls list <meeting-id>` — TSV output (id / title / status / anonymous).

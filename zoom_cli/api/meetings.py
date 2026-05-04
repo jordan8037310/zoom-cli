@@ -387,3 +387,68 @@ def list_past_poll_results(client: ApiClient, meeting_id: str | int) -> dict[str
     Required scopes: ``meeting:read:meeting``.
     """
     return client.get(f"/past_meetings/{quote(str(meeting_id), safe='')}/polls")
+
+
+# ---- livestream surface (RTMP livestream config + start/stop) ----------
+
+#: Allowed values for ``update_livestream_status(action=...)``. Zoom only
+#: supports ``start`` / ``stop`` here; pause/resume aren't real actions
+#: at this endpoint despite the broadcast UI suggesting otherwise.
+ALLOWED_LIVESTREAM_ACTIONS: tuple[str, ...] = ("start", "stop")
+
+
+def get_livestream(client: ApiClient, meeting_id: str | int) -> dict[str, Any]:
+    """``GET /meetings/{meeting_id}/livestream`` — fetch RTMP config.
+
+    Returns ``{stream_url, stream_key, page_url, ...}`` as Zoom holds
+    them. The ``stream_key`` field is sensitive (anyone with it can push
+    video to the destination); the CLI surfaces it but reminds the
+    caller to redact when sharing.
+
+    Required scopes: ``meeting:read:meeting``.
+    """
+    return client.get(f"/meetings/{quote(str(meeting_id), safe='')}/livestream")
+
+
+def update_livestream(
+    client: ApiClient, meeting_id: str | int, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """``PATCH /meetings/{meeting_id}/livestream`` — set RTMP config.
+
+    ``payload`` should contain ``stream_url``, ``stream_key``, and
+    ``page_url``. Zoom's PATCH leaves omitted fields untouched.
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``meeting:write:meeting``.
+    """
+    return client.patch(f"/meetings/{quote(str(meeting_id), safe='')}/livestream", json=payload)
+
+
+def update_livestream_status(
+    client: ApiClient,
+    meeting_id: str | int,
+    *,
+    action: str,
+    settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """``PATCH /meetings/{meeting_id}/livestream/status`` — start or stop.
+
+    Args:
+        client: Authenticated :class:`ApiClient`.
+        meeting_id: Numeric Zoom meeting ID.
+        action: One of :data:`ALLOWED_LIVESTREAM_ACTIONS`.
+        settings: Broadcast settings (display_name, active_speaker_name,
+            …). Required for ``action="start"``; ignored / omitted for
+            ``action="stop"``.
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``meeting:update:livestream`` (or admin equivalent).
+    """
+    if action not in ALLOWED_LIVESTREAM_ACTIONS:
+        raise ValueError(f"action must be one of {ALLOWED_LIVESTREAM_ACTIONS!r}, got {action!r}")
+    body: dict[str, Any] = {"action": action}
+    if settings is not None:
+        body["settings"] = settings
+    return client.patch(f"/meetings/{quote(str(meeting_id), safe='')}/livestream/status", json=body)
