@@ -2081,6 +2081,134 @@ def test_meetings_livestream_stop_confirms_and_aborts(
     assert called["n"] == 0
 
 
+# ---- past instances + invitation + recover (depth-completion) ----------
+
+
+def test_meetings_invitation_prints_text(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_inv(_client, meeting_id):
+        assert meeting_id == "12345"
+        return {"invitation": "Hi! Join my Zoom meeting at https://zoom.us/j/12345"}
+
+    _patch_meetings_module(monkeypatch, get_invitation=fake_inv)
+    result = runner.invoke(main, ["meetings", "invitation", "12345"])
+    assert result.exit_code == 0, result.output
+    assert "Hi! Join my Zoom meeting at https://zoom.us/j/12345" in result.output
+
+
+def test_meetings_recover_yes_calls_api(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_recover(_client, meeting_id):
+        captured["meeting_id"] = meeting_id
+
+    _patch_meetings_module(monkeypatch, recover_meeting=fake_recover)
+    result = runner.invoke(main, ["meetings", "recover", "12345", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured["meeting_id"] == "12345"
+    assert "Recovered meeting 12345" in result.output
+
+
+def test_meetings_recover_confirms_and_aborts(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    called = {"n": 0}
+
+    def fake_recover(*_a, **_k):
+        called["n"] += 1
+
+    _patch_meetings_module(monkeypatch, recover_meeting=fake_recover)
+    result = runner.invoke(main, ["meetings", "recover", "12345"], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    assert called["n"] == 0
+
+
+def test_meetings_past_instances_prints_tsv(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_inst(_client, meeting_id):
+        assert meeting_id == "12345"
+        return {
+            "meetings": [
+                {"uuid": "u-1", "start_time": "2026-04-29T15:00:00Z"},
+                {"uuid": "u-2", "start_time": "2026-04-30T15:00:00Z"},
+            ]
+        }
+
+    _patch_meetings_module(monkeypatch, list_past_instances=fake_inst)
+    result = runner.invoke(main, ["meetings", "past", "instances", "12345"])
+    assert result.exit_code == 0, result.output
+    assert "uuid\tstart_time" in result.output
+    assert "u-1\t2026-04-29T15:00:00Z" in result.output
+    assert "u-2\t2026-04-30T15:00:00Z" in result.output
+
+
+def test_meetings_past_get_prints_summary(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_get(_client, mid):
+        assert mid == "u-1"
+        return {
+            "uuid": "u-1",
+            "id": 12345,
+            "topic": "Daily standup",
+            "start_time": "2026-04-29T15:00:00Z",
+            "duration": 30,
+            "user_name": "Alice",
+        }
+
+    _patch_meetings_module(monkeypatch, get_past_meeting=fake_get)
+    result = runner.invoke(main, ["meetings", "past", "get", "u-1"])
+    assert result.exit_code == 0, result.output
+    assert "uuid: u-1" in result.output
+    assert "topic: Daily standup" in result.output
+    assert "duration: 30" in result.output
+
+
+def test_meetings_past_participants_prints_tsv(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, mid, *, page_size):
+        assert mid == "u-1"
+        return iter(
+            [
+                {
+                    "id": "p-1",
+                    "name": "Alice",
+                    "user_email": "a@e.com",
+                    "join_time": "T1",
+                    "leave_time": "T2",
+                },
+                {
+                    "id": "p-2",
+                    "name": "Bob",
+                    "user_email": "b@e.com",
+                    "join_time": "T3",
+                    "leave_time": "T4",
+                },
+            ]
+        )
+
+    _patch_meetings_module(monkeypatch, list_past_participants=fake_list)
+    result = runner.invoke(main, ["meetings", "past", "participants", "u-1"])
+    assert result.exit_code == 0, result.output
+    assert "id\tname\tuser_email\tjoin_time\tleave_time" in result.output
+    assert "p-1\tAlice\ta@e.com\tT1\tT2" in result.output
+    assert "p-2\tBob\tb@e.com\tT3\tT4" in result.output
+
+
 # ---- #14 (write): zoom users create / delete / settings get -------------
 
 
