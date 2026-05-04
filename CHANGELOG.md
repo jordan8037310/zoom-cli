@@ -33,7 +33,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Users settings update (PR #69): closes the deferred settings-update piece from #14. New `zoom users settings update [user-id] --from-json FILE` rounds out the get → edit → PATCH workflow.
 > Codegen `--from-url` (this branch): scripts/codegen.py can now fetch the OpenAPI spec directly instead of requiring a separate `curl` step.
 > Meetings create/update `--from-json` (this branch): `zoom meetings create` and `zoom meetings update` now accept a `--from-json FILE` (or `-` for stdin) payload-construction mode. Mutually exclusive with the per-field flags. Use this for `recurrence` and `settings` sub-objects that the field flags don't expose.
-> Meeting registrants surface (this branch): full registrant management — list / add / approve / deny / cancel / questions get / questions update — under `zoom meetings registrants`. First entry in the depth-first push to bring Meetings from ~15% → ~80% of Zoom's documented surface.
+> Meeting registrants surface (PR #72): full registrant management — list / add / approve / deny / cancel / questions get / questions update — under `zoom meetings registrants`. First entry in the depth-first push to bring Meetings from ~15% → ~80% of Zoom's documented surface.
+> Meeting polls surface (this branch): list / get / create / update / delete plus past-meeting `results` — under `zoom meetings polls`. Second iteration of the depth-first push.
+
+### Added (post-#13 depth-completion: polls)
+- `zoom meetings polls list <meeting-id>` — TSV output (id / title / status / anonymous).
+- `zoom meetings polls get <meeting-id> <poll-id>` — raw JSON output (round-trips into `polls update --from-json`).
+- `zoom meetings polls create <meeting-id> --from-json FILE` — JSON-only because polls nest deep (questions / answers / right_answers / answer_required) and per-field flags would be unusable.
+- `zoom meetings polls update <meeting-id> <poll-id> --from-json FILE` — full PUT replace per Zoom's spec (NOT a merge); confirms by default since omitted fields are dropped.
+- `zoom meetings polls delete <meeting-id> <poll-id>` — confirms by default; `--yes` to skip.
+- `zoom meetings polls results <meeting-id>` — past-meeting poll results from a different namespace (`/past_meetings/<id>/polls`); JSON output.
+- New API helpers: `meetings.list_polls`, `meetings.get_poll`, `meetings.create_poll`, `meetings.update_poll` (PUT semantics), `meetings.delete_poll`, `meetings.list_past_poll_results`.
 
 ### Added (post-#13 depth-completion: registrants)
 - `zoom meetings registrants list <meeting-id> [--status pending|approved|denied]` — paginated TSV output (id / email / first_name / last_name / status). Default status `pending` mirrors Zoom's own default (the approval queue admins care about).

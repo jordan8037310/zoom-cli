@@ -1692,6 +1692,197 @@ def test_meetings_registrants_questions_update_yes_calls_patch(
     assert captured["payload"] == {"questions": [{"field_name": "country", "required": False}]}
 
 
+# ---- meeting polls (depth-completion follow-up to #13) -----------------
+
+
+def test_meetings_polls_list_prints_tsv(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    _save_creds()
+
+    def fake_list(_client, meeting_id):
+        assert meeting_id == "12345"
+        return {
+            "total_records": 2,
+            "polls": [
+                {"id": "p-1", "title": "Q1", "status": "started", "anonymous": False},
+                {"id": "p-2", "title": "Q2", "status": "ended", "anonymous": True},
+            ],
+        }
+
+    _patch_meetings_module(monkeypatch, list_polls=fake_list)
+    result = runner.invoke(main, ["meetings", "polls", "list", "12345"])
+    assert result.exit_code == 0, result.output
+    assert "id\ttitle\tstatus\tanonymous" in result.output
+    assert "p-1\tQ1\tstarted\tFalse" in result.output
+    assert "p-2\tQ2\tended\tTrue" in result.output
+
+
+def test_meetings_polls_get_prints_json(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    _save_creds()
+    payload = {"id": "p-1", "title": "Q1", "questions": []}
+
+    def fake_get(_client, meeting_id, poll_id):
+        assert (meeting_id, poll_id) == ("12345", "p-1")
+        return payload
+
+    _patch_meetings_module(monkeypatch, get_poll=fake_get)
+    result = runner.invoke(main, ["meetings", "polls", "get", "12345", "p-1"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    assert _json.loads(result.output) == payload
+
+
+def test_meetings_polls_create_sends_payload(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "poll.json"
+    json_file.write_text(
+        '{"title": "T", "questions": [{"name": "Q1", "type": "single", "answers": ["A", "B"]}]}'
+    )
+    captured: dict[str, object] = {}
+
+    def fake_create(_client, meeting_id, payload):
+        captured["meeting_id"] = meeting_id
+        captured["payload"] = payload
+        return {"id": "p-new", "title": "T"}
+
+    _patch_meetings_module(monkeypatch, create_poll=fake_create)
+    result = runner.invoke(
+        main,
+        ["meetings", "polls", "create", "12345", "--from-json", str(json_file)],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["meeting_id"] == "12345"
+    assert captured["payload"]["title"] == "T"
+    assert "Created poll" in result.output
+    assert "p-new" in result.output
+
+
+def test_meetings_polls_create_rejects_invalid_json(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "poll.json"
+    json_file.write_text("not valid json {{{")
+    _patch_meetings_module(monkeypatch, create_poll=lambda *_a, **_k: {})
+    result = runner.invoke(
+        main, ["meetings", "polls", "create", "12345", "--from-json", str(json_file)]
+    )
+    assert result.exit_code == 1
+    assert "Invalid JSON" in result.output
+
+
+def test_meetings_polls_update_yes_skips_confirm(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "poll.json"
+    json_file.write_text('{"title": "T2", "questions": []}')
+    captured: dict[str, object] = {}
+
+    def fake_update(_client, meeting_id, poll_id, payload):
+        captured["meeting_id"] = meeting_id
+        captured["poll_id"] = poll_id
+        captured["payload"] = payload
+
+    _patch_meetings_module(monkeypatch, update_poll=fake_update)
+    result = runner.invoke(
+        main,
+        [
+            "meetings",
+            "polls",
+            "update",
+            "12345",
+            "p-1",
+            "--from-json",
+            str(json_file),
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["poll_id"] == "p-1"
+    assert "Updated poll" in result.output
+
+
+def test_meetings_polls_update_confirms_and_aborts(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Without --yes, an explicit 'n' aborts and the API is not called."""
+    _save_creds()
+    json_file = tmp_path / "poll.json"
+    json_file.write_text('{"title": "T2", "questions": []}')
+    called = {"n": 0}
+
+    def fake_update(*_a, **_k):
+        called["n"] += 1
+
+    _patch_meetings_module(monkeypatch, update_poll=fake_update)
+    result = runner.invoke(
+        main,
+        ["meetings", "polls", "update", "12345", "p-1", "--from-json", str(json_file)],
+        input="n\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    assert called["n"] == 0
+
+
+def test_meetings_polls_delete_yes_calls_api(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_delete(_client, meeting_id, poll_id):
+        captured["meeting_id"] = meeting_id
+        captured["poll_id"] = poll_id
+
+    _patch_meetings_module(monkeypatch, delete_poll=fake_delete)
+    result = runner.invoke(main, ["meetings", "polls", "delete", "12345", "p-1", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured == {"meeting_id": "12345", "poll_id": "p-1"}
+    assert "Deleted poll p-1" in result.output
+
+
+def test_meetings_polls_delete_confirms_and_aborts(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    called = {"n": 0}
+
+    def fake_delete(*_a, **_k):
+        called["n"] += 1
+
+    _patch_meetings_module(monkeypatch, delete_poll=fake_delete)
+    result = runner.invoke(main, ["meetings", "polls", "delete", "12345", "p-1"], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    assert called["n"] == 0
+
+
+def test_meetings_polls_results_prints_json(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Past-meeting poll results — different namespace, JSON output."""
+    _save_creds()
+    payload = {
+        "id": 12345,
+        "questions": [{"name": "Q1", "question_details": [{"answer": "A", "count": 3}]}],
+    }
+
+    def fake_results(_client, meeting_id):
+        assert meeting_id == "12345"
+        return payload
+
+    _patch_meetings_module(monkeypatch, list_past_poll_results=fake_results)
+    result = runner.invoke(main, ["meetings", "polls", "results", "12345"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    assert _json.loads(result.output) == payload
+
+
 # ---- #14 (write): zoom users create / delete / settings get -------------
 
 

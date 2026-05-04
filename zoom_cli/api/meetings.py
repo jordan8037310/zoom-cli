@@ -298,3 +298,92 @@ def update_registration_questions(
         f"/meetings/{quote(str(meeting_id), safe='')}/registrants/questions",
         json=payload,
     )
+
+
+# ---- polls surface (in-meeting Q&A; structured single-/multi-/matching --
+# question shapes — payload is complex enough that the CLI is JSON-only) --
+
+
+def list_polls(client: ApiClient, meeting_id: str | int) -> dict[str, Any]:
+    """``GET /meetings/{meeting_id}/polls`` — return the poll envelope.
+
+    Not paginated: Zoom returns the full poll set inline (typically a
+    handful of polls per meeting). The caller gets back the raw envelope
+    so the ``total_records`` field is available for downstream display.
+
+    Required scopes: ``meeting:read:meeting``.
+    """
+    return client.get(f"/meetings/{quote(str(meeting_id), safe='')}/polls")
+
+
+def get_poll(client: ApiClient, meeting_id: str | int, poll_id: str) -> dict[str, Any]:
+    """``GET /meetings/{meeting_id}/polls/{poll_id}`` — one poll's detail.
+
+    Required scopes: ``meeting:read:meeting``.
+    """
+    return client.get(
+        f"/meetings/{quote(str(meeting_id), safe='')}/polls/{quote(poll_id, safe='')}"
+    )
+
+
+def create_poll(
+    client: ApiClient, meeting_id: str | int, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """``POST /meetings/{meeting_id}/polls`` — add a poll.
+
+    ``payload`` is the full Zoom poll body (``title``, ``poll_type``,
+    ``anonymous``, and a ``questions`` array of question dicts with
+    nested ``answers`` / ``right_answers`` / ``answer_required``).
+
+    Returns the created poll's full detail object.
+
+    Required scopes: ``meeting:write:meeting``.
+    """
+    return client.post(f"/meetings/{quote(str(meeting_id), safe='')}/polls", json=payload)
+
+
+def update_poll(
+    client: ApiClient,
+    meeting_id: str | int,
+    poll_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """``PUT /meetings/{meeting_id}/polls/{poll_id}`` — full replace.
+
+    Note Zoom's poll update is a PUT (full replace), not a PATCH —
+    omitted fields are dropped. Round-trip via :func:`get_poll` first
+    to pick up the existing shape, edit, then submit.
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``meeting:write:meeting``.
+    """
+    return client.put(
+        f"/meetings/{quote(str(meeting_id), safe='')}/polls/{quote(poll_id, safe='')}",
+        json=payload,
+    )
+
+
+def delete_poll(client: ApiClient, meeting_id: str | int, poll_id: str) -> dict[str, Any]:
+    """``DELETE /meetings/{meeting_id}/polls/{poll_id}`` — remove a poll.
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``meeting:write:meeting``.
+    """
+    return client.delete(
+        f"/meetings/{quote(str(meeting_id), safe='')}/polls/{quote(poll_id, safe='')}"
+    )
+
+
+def list_past_poll_results(client: ApiClient, meeting_id: str | int) -> dict[str, Any]:
+    """``GET /past_meetings/{meeting_id}/polls`` — poll RESULTS (not
+    config) for a meeting that has already ended.
+
+    Different namespace from the live polls endpoints: results live
+    under ``/past_meetings``, not ``/meetings``. Same resource shape
+    (questions with per-answer breakdowns).
+
+    Required scopes: ``meeting:read:meeting``.
+    """
+    return client.get(f"/past_meetings/{quote(str(meeting_id), safe='')}/polls")

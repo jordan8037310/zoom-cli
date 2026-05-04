@@ -1473,6 +1473,175 @@ def meetings_registrants_questions_update(meeting_id, from_json, yes):
     click.echo(f"Updated registration questions for meeting {meeting_id}.")
 
 
+# ---- Meeting polls (depth-completion follow-up to #13) -----------------
+#
+# Poll payloads are nested (questions[]/answers[]/right_answers[]/
+# answer_required) so create/update are JSON-only. The list/get/delete
+# commands keep the simple shape from the rest of the CLI.
+
+
+@meetings_cmd.group("polls", help="Manage in-meeting polls.")
+def meetings_polls_cmd():
+    """Group for ``zoom meetings polls ...``."""
+
+
+@meetings_polls_cmd.command("list", help="List polls on a meeting (GET /meetings/<id>/polls).")
+@click.argument("meeting_id")
+@_translate_keyring_errors
+def meetings_polls_list(meeting_id):
+    """TSV output (id\\ttitle\\tstatus\\tanonymous)."""
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            data = meetings.list_polls(client, meeting_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo("id\ttitle\tstatus\tanonymous")
+    for p in data.get("polls", []):
+        click.echo(
+            f"{p.get('id', '')}\t"
+            f"{p.get('title', '')}\t"
+            f"{p.get('status', '')}\t"
+            f"{p.get('anonymous', '')}"
+        )
+
+
+@meetings_polls_cmd.command(
+    "get", help="Print one poll's full detail as JSON (GET /meetings/<id>/polls/<poll-id>)."
+)
+@click.argument("meeting_id")
+@click.argument("poll_id")
+@_translate_keyring_errors
+def meetings_polls_get(meeting_id, poll_id):
+    """Output is raw JSON so it round-trips into ``polls update --from-json``."""
+    import json as _json
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            data = meetings.get_poll(client, meeting_id, poll_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(_json.dumps(data, indent=2))
+
+
+@meetings_polls_cmd.command("create", help="Add a poll to a meeting (POST /meetings/<id>/polls).")
+@click.argument("meeting_id")
+@click.option(
+    "--from-json",
+    "from_json",
+    type=click.File("r", encoding="utf-8"),
+    required=True,
+    help=(
+        "Read the full poll body from a JSON file (or '-' for stdin). "
+        "Polls are nested enough (questions/answers/right_answers/"
+        "answer_required) that per-field flags would be unusable — "
+        "JSON-only by design."
+    ),
+)
+@_translate_keyring_errors
+def meetings_polls_create(meeting_id, from_json):
+    """Returns the created poll's id and title on success."""
+    payload = _load_json_payload_or_exit(from_json, label="--from-json input")
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            result = meetings.create_poll(client, meeting_id, payload)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Created poll. id: {result.get('id', '')}, title: {result.get('title', '')}")
+
+
+@meetings_polls_cmd.command(
+    "update",
+    help="Replace a poll wholesale (PUT /meetings/<id>/polls/<poll-id>).",
+)
+@click.argument("meeting_id")
+@click.argument("poll_id")
+@click.option(
+    "--from-json",
+    "from_json",
+    type=click.File("r", encoding="utf-8"),
+    required=True,
+    help="Read the full poll body from a JSON file (or '-' for stdin).",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@_translate_keyring_errors
+def meetings_polls_update(meeting_id, poll_id, from_json, yes):
+    """Zoom's poll update is a PUT — full replace, NOT a merge. Round-trip
+    via ``polls get`` first to pick up the existing shape."""
+    payload = _load_json_payload_or_exit(from_json, label="--from-json input")
+    if not yes and not click.confirm(
+        f"Replace poll {poll_id} on meeting {meeting_id}? (omitted fields will be dropped)",
+        default=False,
+    ):
+        click.echo("Aborted.")
+        return
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            meetings.update_poll(client, meeting_id, poll_id, payload)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Updated poll {poll_id} on meeting {meeting_id}.")
+
+
+@meetings_polls_cmd.command(
+    "delete",
+    help="Delete a poll (DELETE /meetings/<id>/polls/<poll-id>).",
+)
+@click.argument("meeting_id")
+@click.argument("poll_id")
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@_translate_keyring_errors
+def meetings_polls_delete(meeting_id, poll_id, yes):
+    if not yes and not click.confirm(
+        f"Delete poll {poll_id} from meeting {meeting_id}?", default=False
+    ):
+        click.echo("Aborted.")
+        return
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            meetings.delete_poll(client, meeting_id, poll_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Deleted poll {poll_id} from meeting {meeting_id}.")
+
+
+@meetings_polls_cmd.command(
+    "results",
+    help="Print poll RESULTS for a past meeting (GET /past_meetings/<id>/polls).",
+)
+@click.argument("meeting_id")
+@_translate_keyring_errors
+def meetings_polls_results(meeting_id):
+    """Different namespace from the live polls endpoints — results live
+    under /past_meetings, not /meetings. Output is raw JSON because the
+    per-question result breakdowns nest deeper than TSV can express."""
+    import json as _json
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            data = meetings.list_past_poll_results(client, meeting_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(_json.dumps(data, indent=2))
+
+
 # ---- Zoom Cloud Recordings ----------------------------------------------
 #
 # Closes #15. Same confirmation-flow design as `meetings delete`:
