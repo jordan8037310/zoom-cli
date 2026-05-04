@@ -4839,3 +4839,202 @@ def test_recordings_registrants_status_actions_send_correct_action(
     assert captured["action"] == expected_action
     assert captured["registrant_ids"] == ["r-1", "r-2"]
     assert past in result.output
+
+
+# ---- recordings depth-completion: analytics + reg questions + archive --
+
+
+def test_recordings_analytics_summary_prints_json(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    payload = {"id": 12345, "analytics_summary": [{"name": "view_count", "value": 42}]}
+
+    def fake_summary(_client, mid):
+        assert mid == "12345"
+        return payload
+
+    _patch_recordings_module(monkeypatch, get_analytics_summary=fake_summary)
+    result = runner.invoke(main, ["recordings", "analytics", "summary", "12345"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    assert _json.loads(result.output) == payload
+
+
+def test_recordings_analytics_details_prints_json(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    payload = {
+        "id": 12345,
+        "analytics_details": [{"viewer": "a@e.com", "view_time": 120}],
+    }
+
+    def fake_details(_client, mid):
+        return payload
+
+    _patch_recordings_module(monkeypatch, get_analytics_details=fake_details)
+    result = runner.invoke(main, ["recordings", "analytics", "details", "12345"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    assert _json.loads(result.output) == payload
+
+
+def test_recordings_registrants_questions_get_prints_json(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    payload = {"questions": [{"field_name": "company", "required": True}]}
+
+    def fake_get(_client, mid):
+        return payload
+
+    _patch_recordings_module(monkeypatch, get_recording_registration_questions=fake_get)
+    result = runner.invoke(main, ["recordings", "registrants", "questions", "get", "12345"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    assert _json.loads(result.output) == payload
+
+
+def test_recordings_registrants_questions_update_yes_calls_patch(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "q.json"
+    json_file.write_text('{"questions": [{"field_name": "country"}]}')
+    captured: dict[str, object] = {}
+
+    def fake_update(_client, mid, payload):
+        captured["mid"] = mid
+        captured["payload"] = payload
+
+    _patch_recordings_module(monkeypatch, update_recording_registration_questions=fake_update)
+    result = runner.invoke(
+        main,
+        [
+            "recordings",
+            "registrants",
+            "questions",
+            "update",
+            "12345",
+            "--from-json",
+            str(json_file),
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["payload"] == {"questions": [{"field_name": "country"}]}
+    assert "Updated recording registration questions" in result.output
+
+
+def test_recordings_archive_list_prints_tsv(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, *, from_, to, page_size):
+        return iter(
+            [
+                {
+                    "id": "a-1",
+                    "meeting_id": 12345,
+                    "topic": "Daily Standup",
+                    "archive_date": "2026-04-29",
+                },
+                {
+                    "id": "a-2",
+                    "meeting_id": 99999,
+                    "topic": "Other",
+                    "archive_date": "2026-04-30",
+                },
+            ]
+        )
+
+    _patch_recordings_module(monkeypatch, list_archive_files=fake_list)
+    result = runner.invoke(main, ["recordings", "archive", "list"])
+    assert result.exit_code == 0, result.output
+    assert "id\tmeeting_id\ttopic\tarchive_date" in result.output
+    assert "a-1\t12345\tDaily Standup\t2026-04-29" in result.output
+
+
+def test_recordings_archive_list_forwards_date_filters(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_list(_client, *, from_, to, page_size):
+        captured["from_"] = from_
+        captured["to"] = to
+        return iter([])
+
+    _patch_recordings_module(monkeypatch, list_archive_files=fake_list)
+    result = runner.invoke(
+        main,
+        [
+            "recordings",
+            "archive",
+            "list",
+            "--from",
+            "2026-04-01",
+            "--to",
+            "2026-04-30",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["from_"] == "2026-04-01"
+    assert captured["to"] == "2026-04-30"
+
+
+def test_recordings_archive_get_prints_json(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    payload = {"id": "arch-1", "files": [{"file_type": "MP4", "size": 12345}]}
+
+    def fake_get(_client, file_id):
+        assert file_id == "arch-1"
+        return payload
+
+    _patch_recordings_module(monkeypatch, get_archive_file=fake_get)
+    result = runner.invoke(main, ["recordings", "archive", "get", "arch-1"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    assert _json.loads(result.output) == payload
+
+
+def test_recordings_archive_delete_yes_calls_api(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_delete(_client, file_id):
+        captured["file_id"] = file_id
+
+    _patch_recordings_module(monkeypatch, delete_archive_file=fake_delete)
+    result = runner.invoke(main, ["recordings", "archive", "delete", "arch-1", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured["file_id"] == "arch-1"
+    assert "Deleted archive file arch-1" in result.output
+
+
+def test_recordings_archive_delete_confirms_and_aborts(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Confirmation surfaces the 'no recover step' warning."""
+    _save_creds()
+    called = {"n": 0}
+    _patch_recordings_module(
+        monkeypatch,
+        delete_archive_file=lambda *_a, **_k: called.__setitem__("n", called["n"] + 1),
+    )
+    result = runner.invoke(main, ["recordings", "archive", "delete", "arch-1"], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "no recover step" in result.output
+    assert "Aborted" in result.output
+    assert called["n"] == 0

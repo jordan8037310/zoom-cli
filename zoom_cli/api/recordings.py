@@ -297,3 +297,121 @@ def update_recording_registrant_status(
             "registrants": [{"id": rid} for rid in registrant_ids],
         },
     )
+
+
+# ---- depth-completion: analytics + registrant questions + archive ------
+
+
+def get_analytics_summary(client: ApiClient, meeting_id: str | int) -> dict[str, Any]:
+    """``GET /past_meetings/{meeting_id}/recordings/analytics_summary`` —
+    aggregated viewer metrics (view count, average watch time, etc.) for
+    a past meeting's recording.
+
+    Lives under /past_meetings (not /meetings) — Zoom's namespace
+    convention for after-the-fact data. Requires Business+ Zoom plan.
+
+    Required scopes: ``recording:read:recording``.
+    """
+    return client.get(
+        f"/past_meetings/{quote(str(meeting_id), safe='')}/recordings/analytics_summary"
+    )
+
+
+def get_analytics_details(client: ApiClient, meeting_id: str | int) -> dict[str, Any]:
+    """``GET /past_meetings/{meeting_id}/recordings/analytics_details`` —
+    per-viewer breakdown of who watched, when, and for how long.
+
+    Same Business+ requirement as :func:`get_analytics_summary`.
+
+    Required scopes: ``recording:read:recording``.
+    """
+    return client.get(
+        f"/past_meetings/{quote(str(meeting_id), safe='')}/recordings/analytics_details"
+    )
+
+
+def get_recording_registration_questions(
+    client: ApiClient, meeting_id: str | int
+) -> dict[str, Any]:
+    """``GET /meetings/{meeting_id}/recordings/registrants/questions`` —
+    fetch the recording-registration form schema (standard + custom).
+
+    Returns the full questions envelope so the caller can round-trip it
+    through :func:`update_recording_registration_questions`.
+
+    Required scopes: ``recording:read:recording``.
+    """
+    return client.get(
+        f"/meetings/{quote(str(meeting_id), safe='')}/recordings/registrants/questions"
+    )
+
+
+def update_recording_registration_questions(
+    client: ApiClient, meeting_id: str | int, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """``PATCH /meetings/{meeting_id}/recordings/registrants/questions``
+    — replace the recording-registration form's questions.
+
+    Same wholesale-replace semantics as the meetings registrants
+    questions endpoint — round-trip via the get first.
+
+    Required scopes: ``recording:write:recording``.
+    """
+    return client.patch(
+        f"/meetings/{quote(str(meeting_id), safe='')}/recordings/registrants/questions",
+        json=payload,
+    )
+
+
+def list_archive_files(
+    client: ApiClient,
+    *,
+    from_: str | None = None,
+    to: str | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
+) -> Iterator[dict[str, Any]]:
+    """``GET /archive_files`` — yield archive files (Business+ archiving
+    feature) across all pages.
+
+    Args:
+        client: Authenticated :class:`ApiClient`.
+        from_: ISO date (YYYY-MM-DD) lower bound on archive date.
+        to: ISO date upper bound.
+        page_size: Items per page; see :data:`DEFAULT_PAGE_SIZE`.
+
+    Yields:
+        One archive_file dict per record.
+
+    Required scopes: ``recording:read:archive_file:admin``.
+    """
+    params: dict[str, Any] = {}
+    if from_ is not None:
+        params["from"] = from_
+    if to is not None:
+        params["to"] = to
+    return paginate(
+        client,
+        "/archive_files",
+        item_key="archive_files",
+        params=params,
+        page_size=page_size,
+    )
+
+
+def get_archive_file(client: ApiClient, file_id: str) -> dict[str, Any]:
+    """``GET /archive_files/{file_id}`` — fetch one archive file's
+    metadata + per-format download URLs.
+
+    Required scopes: ``recording:read:archive_file:admin``.
+    """
+    return client.get(f"/archive_files/{quote(file_id, safe='')}")
+
+
+def delete_archive_file(client: ApiClient, file_id: str) -> dict[str, Any]:
+    """``DELETE /archive_files/{file_id}`` — permanently remove an
+    archive file. No trash/recover step here (unlike standard
+    recordings).
+
+    Required scopes: ``recording:write:archive_file:admin``.
+    """
+    return client.delete(f"/archive_files/{quote(file_id, safe='')}")
