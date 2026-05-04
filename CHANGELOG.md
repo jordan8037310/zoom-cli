@@ -35,7 +35,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Meetings create/update `--from-json` (this branch): `zoom meetings create` and `zoom meetings update` now accept a `--from-json FILE` (or `-` for stdin) payload-construction mode. Mutually exclusive with the per-field flags. Use this for `recurrence` and `settings` sub-objects that the field flags don't expose.
 > Meeting registrants surface (PR #72): full registrant management — list / add / approve / deny / cancel / questions get / questions update — under `zoom meetings registrants`. First entry in the depth-first push to bring Meetings from ~15% → ~80% of Zoom's documented surface.
 > Meeting polls surface (PR #73): list / get / create / update / delete plus past-meeting `results` — under `zoom meetings polls`. Second iteration of the depth-first push.
-> Meeting livestream surface (this branch): get / update RTMP config + start/stop the livestream — under `zoom meetings livestream`. Third iteration of the depth-first push.
+> Meeting livestream surface (PR #74): get / update RTMP config + start/stop the livestream — under `zoom meetings livestream`. Third iteration of the depth-first push.
+> Past instances + invitation + recover (this branch): `zoom meetings invitation`, `zoom meetings recover`, and a new `zoom meetings past` subgroup with `instances / get / participants`. Fourth iteration of the depth-first push.
+
+### Added (post-#13 depth-completion: past instances + invitation + recover)
+- `zoom meetings invitation <meeting-id>` — print the canonical email invitation text Zoom builds for the meeting.
+- `zoom meetings recover <meeting-id>` — un-delete a soft-deleted meeting (counterpart to `meetings delete`). Confirms by default; `--yes` to skip.
+- `zoom meetings past instances <meeting-id>` — list past occurrences of a recurring meeting (TSV: uuid / start_time).
+- `zoom meetings past get <meeting-id-or-uuid>` — past-meeting summary (one-per-line; same shape as `meetings get`).
+- `zoom meetings past participants <meeting-id-or-uuid>` — paginated TSV list of attendees who joined a past meeting.
+- New API helpers: `meetings.get_invitation`, `meetings.list_past_instances`, `meetings.get_past_meeting`, `meetings.list_past_participants` (paginated), `meetings.recover_meeting`.
 
 ### Added (post-#13 depth-completion: livestream)
 - `zoom meetings livestream get <meeting-id>` — print RTMP config (stream_url / stream_key / page_url / resolution) one-per-line.

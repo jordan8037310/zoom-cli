@@ -559,3 +559,104 @@ def test_update_livestream_status_url_encodes_id() -> None:
 def test_allowed_livestream_actions_pinned() -> None:
     assert "start" in meetings.ALLOWED_LIVESTREAM_ACTIONS
     assert "stop" in meetings.ALLOWED_LIVESTREAM_ACTIONS
+
+
+# ---- past instances + invitation + past-meeting summary/participants ----
+
+
+def test_get_invitation_targets_correct_path() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {"invitation": "Hi! You're invited to..."}
+
+    result = meetings.get_invitation(fake_client, 123)
+
+    fake_client.get.assert_called_once_with("/meetings/123/invitation")
+    assert "invitation" in result
+
+
+def test_get_invitation_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {}
+    meetings.get_invitation(fake_client, "evil/../99")
+    arg = fake_client.get.call_args[0][0]
+    assert "/.." not in arg
+    assert "%2F" in arg
+
+
+def test_list_past_instances_targets_past_meetings_endpoint() -> None:
+    """Past instances list lives under /past_meetings (not /meetings) —
+    same namespace as past_poll_results."""
+    fake_client = MagicMock()
+    fake_client.get.return_value = {
+        "meetings": [{"uuid": "u-1", "start_time": "2026-04-29T15:00:00Z"}]
+    }
+
+    result = meetings.list_past_instances(fake_client, 123)
+
+    fake_client.get.assert_called_once_with("/past_meetings/123/instances")
+    assert result["meetings"][0]["uuid"] == "u-1"
+
+
+def test_get_past_meeting_targets_past_meetings_endpoint() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {"id": 123, "topic": "Daily standup"}
+
+    result = meetings.get_past_meeting(fake_client, 123)
+
+    fake_client.get.assert_called_once_with("/past_meetings/123")
+    assert result["topic"] == "Daily standup"
+
+
+def test_get_past_meeting_url_encodes_uuid() -> None:
+    """UUIDs (the more typical past-meeting key) often contain slashes
+    that Zoom expects double-encoded — but we're conservative and just
+    single-encode (Zoom accepts both)."""
+    fake_client = MagicMock()
+    fake_client.get.return_value = {}
+    meetings.get_past_meeting(fake_client, "evil/../99")
+    arg = fake_client.get.call_args[0][0]
+    assert "/.." not in arg
+    assert "%2F" in arg
+
+
+def test_list_past_participants_walks_pagination() -> None:
+    fake_client = MagicMock()
+    fake_client.get.side_effect = [
+        {"participants": [{"id": "p-1"}, {"id": "p-2"}], "next_page_token": "tok-2"},
+        {"participants": [{"id": "p-3"}], "next_page_token": ""},
+    ]
+
+    result = list(meetings.list_past_participants(fake_client, 123))
+
+    assert result == [{"id": "p-1"}, {"id": "p-2"}, {"id": "p-3"}]
+    first = fake_client.get.call_args_list[0]
+    assert first[0][0] == "/past_meetings/123/participants"
+
+
+def test_list_past_participants_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {"participants": [], "next_page_token": ""}
+    list(meetings.list_past_participants(fake_client, "evil/../99"))
+    call_path = fake_client.get.call_args_list[0][0][0]
+    assert "/.." not in call_path
+    assert "%2F" in call_path
+
+
+def test_recover_meeting_puts_status_with_action_recover() -> None:
+    """Recovering a soft-deleted meeting — separate verb from end_meeting
+    even though both PUT to /meetings/<id>/status."""
+    fake_client = MagicMock()
+    fake_client.put.return_value = {}
+
+    meetings.recover_meeting(fake_client, 123)
+
+    fake_client.put.assert_called_once_with("/meetings/123/status", json={"action": "recover"})
+
+
+def test_recover_meeting_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.put.return_value = {}
+    meetings.recover_meeting(fake_client, "evil/../99")
+    arg = fake_client.put.call_args[0][0]
+    assert "/.." not in arg
+    assert "%2F" in arg

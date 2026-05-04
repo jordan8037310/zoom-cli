@@ -1827,6 +1827,135 @@ def meetings_livestream_stop(meeting_id, yes):
     click.echo(f"Stopped livestream on meeting {meeting_id}.")
 
 
+# ---- Past instances + invitation + past-meeting summary/participants + --
+# ---- recover (depth-completion follow-up to #13) ------------------------
+
+
+@meetings_cmd.command(
+    "invitation", help="Print the invitation text (GET /meetings/<id>/invitation)."
+)
+@click.argument("meeting_id")
+@_translate_keyring_errors
+def meetings_invitation(meeting_id):
+    """Output is the raw email invitation text Zoom builds for the
+    meeting — paste-ready into any email client."""
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            data = meetings.get_invitation(client, meeting_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(data.get("invitation", ""))
+
+
+@meetings_cmd.command(
+    "recover",
+    help="Restore a soft-deleted meeting (PUT /meetings/<id>/status, action=recover).",
+)
+@click.argument("meeting_id")
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@_translate_keyring_errors
+def meetings_recover(meeting_id, yes):
+    """Counterpart to ``meetings delete`` — Zoom keeps deleted meetings
+    recoverable for a window. Confirms by default since this changes
+    soft-deleted state to active."""
+    if not yes and not click.confirm(f"Recover (un-delete) meeting {meeting_id}?", default=False):
+        click.echo("Aborted.")
+        return
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            meetings.recover_meeting(client, meeting_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Recovered meeting {meeting_id}.")
+
+
+@meetings_cmd.group("past", help="Read endpoints for meetings that have already ended.")
+def meetings_past_cmd():
+    """Group for ``zoom meetings past ...``."""
+
+
+@meetings_past_cmd.command(
+    "instances",
+    help="List past occurrences of a recurring meeting (GET /past_meetings/<id>/instances).",
+)
+@click.argument("meeting_id")
+@_translate_keyring_errors
+def meetings_past_instances(meeting_id):
+    """TSV output (uuid\\tstart_time). The uuid is the handle for
+    ``meetings past get`` and ``meetings past participants``."""
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            data = meetings.list_past_instances(client, meeting_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo("uuid\tstart_time")
+    for inst in data.get("meetings", []):
+        click.echo(f"{inst.get('uuid', '')}\t{inst.get('start_time', '')}")
+
+
+@meetings_past_cmd.command(
+    "get",
+    help="Print past-meeting summary (GET /past_meetings/<id-or-uuid>).",
+)
+@click.argument("meeting_id_or_uuid")
+@_translate_keyring_errors
+def meetings_past_get(meeting_id_or_uuid):
+    """``meeting_id_or_uuid`` accepts either the numeric meeting ID or a
+    meeting instance UUID (from ``meetings past instances``). Output is
+    one-per-line, same shape as ``meetings get``."""
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            data = meetings.get_past_meeting(client, meeting_id_or_uuid)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    for field in ("uuid", "id", "topic", "type", "start_time", "end_time", "duration", "user_name"):
+        if field in data:
+            click.echo(f"{field}: {data[field]}")
+
+
+@meetings_past_cmd.command(
+    "participants",
+    help="List participants who joined a past meeting (paginates GET /past_meetings/<id-or-uuid>/participants).",
+)
+@click.argument("meeting_id_or_uuid")
+@click.option(
+    "--page-size",
+    type=click.IntRange(1, 300),
+    default=300,
+    show_default=True,
+    help="Items per page request.",
+)
+@_translate_keyring_errors
+def meetings_past_participants(meeting_id_or_uuid, page_size):
+    """TSV output (id\\tname\\tuser_email\\tjoin_time\\tleave_time)."""
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            click.echo("id\tname\tuser_email\tjoin_time\tleave_time")
+            for p in meetings.list_past_participants(
+                client, meeting_id_or_uuid, page_size=page_size
+            ):
+                click.echo(
+                    f"{p.get('id', '')}\t"
+                    f"{p.get('name', '')}\t"
+                    f"{p.get('user_email', '')}\t"
+                    f"{p.get('join_time', '')}\t"
+                    f"{p.get('leave_time', '')}"
+                )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+
+
 # ---- Zoom Cloud Recordings ----------------------------------------------
 #
 # Closes #15. Same confirmation-flow design as `meetings delete`:

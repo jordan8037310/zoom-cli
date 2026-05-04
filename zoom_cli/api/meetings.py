@@ -452,3 +452,89 @@ def update_livestream_status(
     if settings is not None:
         body["settings"] = settings
     return client.patch(f"/meetings/{quote(str(meeting_id), safe='')}/livestream/status", json=body)
+
+
+# ---- past instances + invitation + past-meeting summary/participants + --
+# ---- recover (soft-deleted) ---------------------------------------------
+
+
+def get_invitation(client: ApiClient, meeting_id: str | int) -> dict[str, Any]:
+    """``GET /meetings/{meeting_id}/invitation`` — fetch the canonical
+    email invitation text for a meeting.
+
+    Returns ``{invitation: str}``. Useful for "give me the email body to
+    paste into Outlook" workflows.
+
+    Required scopes: ``meeting:read:meeting``.
+    """
+    return client.get(f"/meetings/{quote(str(meeting_id), safe='')}/invitation")
+
+
+def list_past_instances(client: ApiClient, meeting_id: str | int) -> dict[str, Any]:
+    """``GET /past_meetings/{meeting_id}/instances`` — list past
+    occurrences of a recurring meeting.
+
+    Not paginated: Zoom returns the full instance list inline. Each
+    instance includes a ``uuid`` and ``start_time`` — the uuid is the
+    handle for ``get_past_meeting`` and ``list_past_participants``.
+
+    Required scopes: ``meeting:read:meeting``.
+    """
+    return client.get(f"/past_meetings/{quote(str(meeting_id), safe='')}/instances")
+
+
+def get_past_meeting(client: ApiClient, meeting_id_or_uuid: str | int) -> dict[str, Any]:
+    """``GET /past_meetings/{meeting_id}`` — summary for a meeting that
+    already ended.
+
+    The path segment accepts either the numeric meeting ID or a meeting
+    instance UUID (from ``list_past_instances``). For UUIDs that contain
+    ``/`` Zoom requires double-encoding; we single-encode here and let
+    callers double-encode upstream if needed (the conservative default).
+
+    Required scopes: ``meeting:read:meeting``.
+    """
+    return client.get(f"/past_meetings/{quote(str(meeting_id_or_uuid), safe='')}")
+
+
+def list_past_participants(
+    client: ApiClient,
+    meeting_id_or_uuid: str | int,
+    *,
+    page_size: int = DEFAULT_PAGE_SIZE,
+) -> Iterator[dict[str, Any]]:
+    """``GET /past_meetings/{meeting_id}/participants`` — yield
+    participants who joined a past meeting.
+
+    Same UUID/ID semantics as :func:`get_past_meeting`. Paginated via
+    ``next_page_token`` like every other paginated endpoint here.
+
+    Required scopes: ``meeting:read:meeting`` (or
+    ``dashboard:read:list_meeting_participants`` for the live dashboard
+    equivalent).
+    """
+    return paginate(
+        client,
+        f"/past_meetings/{quote(str(meeting_id_or_uuid), safe='')}/participants",
+        item_key="participants",
+        params={},
+        page_size=page_size,
+    )
+
+
+def recover_meeting(client: ApiClient, meeting_id: str | int) -> dict[str, Any]:
+    """``PUT /meetings/{meeting_id}/status`` with ``action=recover`` —
+    restore a soft-deleted meeting.
+
+    Counterpart to :func:`end_meeting` (action=end) and a recovery path
+    for :func:`delete_meeting` (which soft-deletes by default; Zoom keeps
+    the meeting recoverable for a window).
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``meeting:write:meeting``.
+    """
+    return client.put(
+        f"/meetings/{quote(str(meeting_id), safe='')}/status",
+        json={"action": "recover"},
+    )
