@@ -292,3 +292,128 @@ def get_user_permissions(client: ApiClient, user_id: str) -> dict[str, Any]:
     Required scopes: ``user:read:permission:admin``.
     """
     return client.get(f"/users/{quote(user_id, safe='')}/permissions")
+
+
+# ---- depth-completion: schedulers + assistants + presence --------------
+
+#: Allowed values for ``set_presence(status=...)``. Mirrors Zoom's
+#: chat presence-status enum. Case-sensitive and exact (``DND`` is NOT
+#: an alias — Zoom uses ``Do_Not_Disturb``).
+ALLOWED_PRESENCE_STATUSES: tuple[str, ...] = (
+    "Available",
+    "Away",
+    "Do_Not_Disturb",
+    "In_Calendar_Event",
+    "Presenting",
+    "In_A_Zoom_Meeting",
+    "On_A_Call",
+)
+
+
+def list_schedulers(client: ApiClient, user_id: str) -> dict[str, Any]:
+    """``GET /users/{user_id}/schedulers`` — list users authorized to
+    schedule meetings on behalf of this user.
+
+    Returns ``{schedulers: [{id, email}, ...]}``.
+
+    Required scopes: ``user:read:user``.
+    """
+    return client.get(f"/users/{quote(user_id, safe='')}/schedulers")
+
+
+def delete_scheduler(client: ApiClient, user_id: str, scheduler_id: str) -> dict[str, Any]:
+    """``DELETE /users/{user_id}/schedulers/{scheduler_id}`` — revoke
+    one scheduler's permission.
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``user:write:scheduler:admin``.
+    """
+    return client.delete(
+        f"/users/{quote(user_id, safe='')}/schedulers/{quote(scheduler_id, safe='')}"
+    )
+
+
+def delete_all_schedulers(client: ApiClient, user_id: str) -> dict[str, Any]:
+    """``DELETE /users/{user_id}/schedulers`` — revoke all schedulers
+    in one call. Same path as :func:`list_schedulers`, just DELETE.
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``user:write:scheduler:admin``.
+    """
+    return client.delete(f"/users/{quote(user_id, safe='')}/schedulers")
+
+
+def add_assistants(client: ApiClient, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """``POST /users/{user_id}/assistants`` — assign assistants who
+    can manage meetings on behalf of this user.
+
+    ``payload`` is ``{assistants: [{id?, email}, ...]}``. Identifying
+    by email is the common case; ``id`` is for already-known Zoom user
+    IDs.
+
+    Returns Zoom's response with comma-separated assistant IDs and
+    assignment timestamp.
+
+    Required scopes: ``user:write:assistant:admin``.
+    """
+    return client.post(f"/users/{quote(user_id, safe='')}/assistants", json=payload)
+
+
+def delete_assistant(client: ApiClient, user_id: str, assistant_id: str) -> dict[str, Any]:
+    """``DELETE /users/{user_id}/assistants/{assistant_id}`` — revoke
+    one assistant.
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``user:write:assistant:admin``.
+    """
+    return client.delete(
+        f"/users/{quote(user_id, safe='')}/assistants/{quote(assistant_id, safe='')}"
+    )
+
+
+def delete_all_assistants(client: ApiClient, user_id: str) -> dict[str, Any]:
+    """``DELETE /users/{user_id}/assistants`` — revoke all assistants
+    in one call. Same path as :func:`add_assistants`, just DELETE.
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``user:write:assistant:admin``.
+    """
+    return client.delete(f"/users/{quote(user_id, safe='')}/assistants")
+
+
+def get_presence(client: ApiClient, user_id: str) -> dict[str, Any]:
+    """``GET /users/{user_id}/presence_status`` — fetch the user's
+    current chat presence status.
+
+    Returns ``{status: str}`` where status is one of
+    :data:`ALLOWED_PRESENCE_STATUSES`.
+
+    Required scopes: ``user:read:user`` or chat-specific equivalent.
+    """
+    return client.get(f"/users/{quote(user_id, safe='')}/presence_status")
+
+
+def set_presence(client: ApiClient, user_id: str, *, status: str) -> dict[str, Any]:
+    """``PUT /users/{user_id}/presence_status`` — set presence status.
+
+    Args:
+        client: Authenticated :class:`ApiClient`.
+        user_id: Zoom user ID. Setting on others requires admin scope;
+            self-set works with the user's own OAuth.
+        status: One of :data:`ALLOWED_PRESENCE_STATUSES`.
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``user:write:presence_status:admin`` or
+    ``user:write:presence_status`` (self).
+    """
+    if status not in ALLOWED_PRESENCE_STATUSES:
+        raise ValueError(f"status must be one of {ALLOWED_PRESENCE_STATUSES!r}, got {status!r}")
+    return client.put(
+        f"/users/{quote(user_id, safe='')}/presence_status",
+        json={"status": status},
+    )

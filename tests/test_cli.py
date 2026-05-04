@@ -4377,3 +4377,251 @@ def test_users_permissions_prints_one_per_line(
     assert result.exit_code == 0, result.output
     assert "AccountSettingPermission" in result.output
     assert "MeetingPermission" in result.output
+
+
+# ---- users depth-completion: schedulers / assistants / presence --------
+
+
+def test_users_schedulers_list_prints_tsv(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, user_id):
+        assert user_id == "u-1"
+        return {
+            "schedulers": [
+                {"id": "s-1", "email": "a@e.com"},
+                {"id": "s-2", "email": "b@e.com"},
+            ]
+        }
+
+    _patch_users_module(monkeypatch, list_schedulers=fake_list)
+    result = runner.invoke(main, ["users", "schedulers", "list", "u-1"])
+    assert result.exit_code == 0, result.output
+    assert "id\temail" in result.output
+    assert "s-1\ta@e.com" in result.output
+    assert "s-2\tb@e.com" in result.output
+
+
+def test_users_schedulers_delete_one_yes_calls_specific_endpoint(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_one(_client, user_id, scheduler_id):
+        captured["one"] = (user_id, scheduler_id)
+
+    def fake_all(*_a, **_k):
+        captured["all_called"] = True
+
+    _patch_users_module(
+        monkeypatch,
+        delete_scheduler=fake_one,
+        delete_all_schedulers=fake_all,
+    )
+    result = runner.invoke(main, ["users", "schedulers", "delete", "u-1", "s-1", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured.get("one") == ("u-1", "s-1")
+    assert "all_called" not in captured
+    assert "Revoked scheduler s-1" in result.output
+
+
+def test_users_schedulers_delete_all_yes_calls_collection_endpoint(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_all(_client, user_id):
+        captured["all"] = user_id
+
+    _patch_users_module(
+        monkeypatch,
+        delete_scheduler=lambda *_a, **_k: None,
+        delete_all_schedulers=fake_all,
+    )
+    result = runner.invoke(main, ["users", "schedulers", "delete", "u-1", "--all", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured["all"] == "u-1"
+    assert "Revoked all schedulers" in result.output
+
+
+def test_users_schedulers_delete_rejects_no_args(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    _patch_users_module(
+        monkeypatch,
+        delete_scheduler=lambda *_a, **_k: None,
+        delete_all_schedulers=lambda *_a, **_k: None,
+    )
+    result = runner.invoke(main, ["users", "schedulers", "delete", "u-1", "--yes"])
+    assert result.exit_code == 1
+    assert "scheduler-id" in result.output and "--all" in result.output
+
+
+def test_users_schedulers_delete_rejects_id_and_all(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    _patch_users_module(
+        monkeypatch,
+        delete_scheduler=lambda *_a, **_k: None,
+        delete_all_schedulers=lambda *_a, **_k: None,
+    )
+    result = runner.invoke(
+        main,
+        ["users", "schedulers", "delete", "u-1", "s-1", "--all", "--yes"],
+    )
+    assert result.exit_code == 1
+    assert "mutually exclusive" in result.output
+
+
+def test_users_assistants_add_field_flags_build_payload(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_add(_client, user_id, payload):
+        captured["user_id"] = user_id
+        captured["payload"] = payload
+        return {"ids": "a-1,a-2", "add_at": "T"}
+
+    _patch_users_module(monkeypatch, add_assistants=fake_add)
+    result = runner.invoke(
+        main,
+        [
+            "users",
+            "assistants",
+            "add",
+            "u-1",
+            "--email",
+            "a@e.com",
+            "--email",
+            "b@e.com",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["user_id"] == "u-1"
+    assert captured["payload"] == {"assistants": [{"email": "a@e.com"}, {"email": "b@e.com"}]}
+    assert "Added assistants" in result.output
+    assert "a-1,a-2" in result.output
+
+
+def test_users_assistants_add_from_json_mutually_exclusive(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "as.json"
+    json_file.write_text('{"assistants": [{"email": "a@e.com"}]}')
+    _patch_users_module(monkeypatch, add_assistants=lambda *_a, **_k: {})
+    result = runner.invoke(
+        main,
+        [
+            "users",
+            "assistants",
+            "add",
+            "u-1",
+            "--from-json",
+            str(json_file),
+            "--email",
+            "x@e.com",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "mutually exclusive" in result.output
+
+
+def test_users_assistants_add_rejects_no_args(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    _patch_users_module(monkeypatch, add_assistants=lambda *_a, **_k: {})
+    result = runner.invoke(main, ["users", "assistants", "add", "u-1"])
+    assert result.exit_code == 1
+    assert "--email" in result.output
+
+
+def test_users_assistants_delete_one_yes_calls_specific_endpoint(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_one(_client, user_id, assistant_id):
+        captured["one"] = (user_id, assistant_id)
+
+    _patch_users_module(
+        monkeypatch,
+        delete_assistant=fake_one,
+        delete_all_assistants=lambda *_a, **_k: None,
+    )
+    result = runner.invoke(main, ["users", "assistants", "delete", "u-1", "a-1", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured["one"] == ("u-1", "a-1")
+    assert "Revoked assistant a-1" in result.output
+
+
+def test_users_assistants_delete_all_yes_calls_collection_endpoint(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_all(_client, user_id):
+        captured["all"] = user_id
+
+    _patch_users_module(
+        monkeypatch,
+        delete_assistant=lambda *_a, **_k: None,
+        delete_all_assistants=fake_all,
+    )
+    result = runner.invoke(main, ["users", "assistants", "delete", "u-1", "--all", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured["all"] == "u-1"
+    assert "Revoked all assistants" in result.output
+
+
+def test_users_presence_get_prints_status(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_get(_client, user_id):
+        assert user_id == "u-1"
+        return {"status": "Available"}
+
+    _patch_users_module(monkeypatch, get_presence=fake_get)
+    result = runner.invoke(main, ["users", "presence", "get", "u-1"])
+    assert result.exit_code == 0, result.output
+    assert "Available" in result.output
+
+
+def test_users_presence_set_calls_api(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_set(_client, user_id, *, status):
+        captured["user_id"] = user_id
+        captured["status"] = status
+
+    _patch_users_module(monkeypatch, set_presence=fake_set)
+    result = runner.invoke(main, ["users", "presence", "set", "u-1", "Do_Not_Disturb"])
+    assert result.exit_code == 0, result.output
+    assert captured["user_id"] == "u-1"
+    assert captured["status"] == "Do_Not_Disturb"
+    assert "Do_Not_Disturb" in result.output
+
+
+def test_users_presence_set_rejects_unknown_status(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Click's Choice rejects bogus values before the API call."""
+    _save_creds()
+    _patch_users_module(monkeypatch, set_presence=lambda *_a, **_k: None)
+    result = runner.invoke(main, ["users", "presence", "set", "u-1", "DND"])
+    assert result.exit_code != 0
+    assert "DND" in result.output or "Invalid value" in result.output

@@ -417,3 +417,124 @@ def test_get_user_permissions_url_encodes_id() -> None:
     arg = fake_client.get.call_args[0][0]
     assert "/.." not in arg
     assert "%2F" in arg
+
+
+# ---- depth-completion: schedulers + assistants + presence --------------
+
+
+def test_list_schedulers_targets_correct_path() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {"schedulers": [{"id": "s-1", "email": "a@e.com"}]}
+
+    result = users.list_schedulers(fake_client, "u-1")
+
+    fake_client.get.assert_called_once_with("/users/u-1/schedulers")
+    assert result["schedulers"][0]["email"] == "a@e.com"
+
+
+def test_list_schedulers_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {}
+    users.list_schedulers(fake_client, "evil/../1")
+    arg = fake_client.get.call_args[0][0]
+    assert "/.." not in arg
+    assert "%2F" in arg
+
+
+def test_delete_scheduler_targets_specific_path() -> None:
+    fake_client = MagicMock()
+    fake_client.delete.return_value = {}
+
+    users.delete_scheduler(fake_client, "u-1", "s-1")
+
+    fake_client.delete.assert_called_once_with("/users/u-1/schedulers/s-1")
+
+
+def test_delete_scheduler_url_encodes_both_segments() -> None:
+    fake_client = MagicMock()
+    fake_client.delete.return_value = {}
+    users.delete_scheduler(fake_client, "u/../1", "s/../1")
+    arg = fake_client.delete.call_args[0][0]
+    assert arg.count("%2F") == 4
+    assert "/.." not in arg
+
+
+def test_delete_all_schedulers_targets_collection_path() -> None:
+    """Bulk delete: same path as list, just DELETE."""
+    fake_client = MagicMock()
+    fake_client.delete.return_value = {}
+
+    users.delete_all_schedulers(fake_client, "u-1")
+
+    fake_client.delete.assert_called_once_with("/users/u-1/schedulers")
+
+
+def test_add_assistants_posts_payload() -> None:
+    """Assistant assignment — payload contains an array of
+    ``{id?, email}`` dicts. Identifying by email is the common case."""
+    fake_client = MagicMock()
+    fake_client.post.return_value = {
+        "ids": "a-1,a-2",
+        "add_at": "2026-04-30T12:00:00Z",
+    }
+
+    payload = {"assistants": [{"email": "alice@e.com"}, {"email": "bob@e.com"}]}
+    result = users.add_assistants(fake_client, "u-1", payload)
+
+    fake_client.post.assert_called_once_with("/users/u-1/assistants", json=payload)
+    assert result["ids"] == "a-1,a-2"
+
+
+def test_delete_assistant_targets_specific_path() -> None:
+    fake_client = MagicMock()
+    fake_client.delete.return_value = {}
+
+    users.delete_assistant(fake_client, "u-1", "a-1")
+
+    fake_client.delete.assert_called_once_with("/users/u-1/assistants/a-1")
+
+
+def test_delete_all_assistants_targets_collection_path() -> None:
+    fake_client = MagicMock()
+    fake_client.delete.return_value = {}
+
+    users.delete_all_assistants(fake_client, "u-1")
+
+    fake_client.delete.assert_called_once_with("/users/u-1/assistants")
+
+
+def test_get_presence_targets_correct_path() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {"status": "Available"}
+
+    result = users.get_presence(fake_client, "u-1")
+
+    fake_client.get.assert_called_once_with("/users/u-1/presence_status")
+    assert result["status"] == "Available"
+
+
+def test_set_presence_puts_status_with_action() -> None:
+    """PUT body is {status: <state>}; Zoom's API quirk."""
+    fake_client = MagicMock()
+    fake_client.put.return_value = {}
+
+    users.set_presence(fake_client, "u-1", status="Do_Not_Disturb")
+
+    fake_client.put.assert_called_once_with(
+        "/users/u-1/presence_status", json={"status": "Do_Not_Disturb"}
+    )
+
+
+@pytest.mark.parametrize("bad_status", ["bogus", "", "available", "DND"])
+def test_set_presence_rejects_unknown_status(bad_status: str) -> None:
+    """Pinned set — case-sensitive and exact (Zoom uses Available /
+    Away / Do_Not_Disturb / In_Calendar_Event etc.)."""
+    fake_client = MagicMock()
+    with pytest.raises(ValueError, match="status"):
+        users.set_presence(fake_client, "u-1", status=bad_status)
+
+
+def test_allowed_presence_statuses_pinned() -> None:
+    assert "Available" in users.ALLOWED_PRESENCE_STATUSES
+    assert "Away" in users.ALLOWED_PRESENCE_STATUSES
+    assert "Do_Not_Disturb" in users.ALLOWED_PRESENCE_STATUSES

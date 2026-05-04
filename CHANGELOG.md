@@ -38,7 +38,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Meeting livestream surface (PR #74): get / update RTMP config + start/stop the livestream — under `zoom meetings livestream`. Third iteration of the depth-first push.
 > Past instances + invitation + recover (PR #75): `zoom meetings invitation`, `zoom meetings recover`, and a new `zoom meetings past` subgroup with `instances / get / participants`. Fourth iteration of the depth-first push.
 > Survey + token + batch register + in-meeting controls (PR #76): `zoom meetings survey [get/update/delete]`, `zoom meetings token`, `zoom meetings registrants batch`, `zoom meetings control`. Fifth iteration of the depth-first push — closes Meetings to ~80% of Zoom's documented surface.
-> Users status + password + email + token + permissions (this branch): `zoom users [activate|deactivate|password|email|token|permissions]`. First iteration of the Users depth-first push (~25% → target ~80%).
+> Users status + password + email + token + permissions (PR #77): `zoom users [activate|deactivate|password|email|token|permissions]`. First iteration of the Users depth-first push (~25% → target ~80%).
+> Users schedulers + assistants + presence (this branch): `zoom users schedulers [list|delete]`, `zoom users assistants [add|delete]`, `zoom users presence [get|set]`. Second iteration of the Users depth-first push.
+
+### Added (post-#14 depth-completion: schedulers + assistants + presence)
+- `zoom users schedulers list <user-id>` — TSV (id / email) of users authorized to schedule meetings on this user's behalf.
+- `zoom users schedulers delete <user-id> <scheduler-id|--all>` — revoke one or all. Confirms by default; `--yes` to skip. Mutually-exclusive arg/flag validation.
+- `zoom users assistants add <user-id> --email E [--email E ...]` — assign assistants by email. `--from-json FILE` accepts the full body (with IDs) and is mutually exclusive with `--email`.
+- `zoom users assistants delete <user-id> <assistant-id|--all>` — revoke one or all. Confirms by default; `--yes` to skip.
+- `zoom users presence get <user-id>` — print current chat presence status.
+- `zoom users presence set <user-id> <STATUS>` — set presence. STATUS is case-sensitive (Available / Away / Do_Not_Disturb / In_Calendar_Event / Presenting / In_A_Zoom_Meeting / On_A_Call); validated by Click's Choice.
+- New API helpers: `users.list_schedulers`, `users.delete_scheduler`, `users.delete_all_schedulers`, `users.add_assistants`, `users.delete_assistant`, `users.delete_all_assistants`, `users.get_presence`, `users.set_presence` (status validated against `ALLOWED_PRESENCE_STATUSES`).
 
 ### Added (post-#14 depth-completion: status + password + email + token + permissions)
 - `zoom users activate|deactivate <user-id>` — toggle account status. Confirms by default; `--yes` to skip. Same factory pattern as the meeting registrant status verbs.
