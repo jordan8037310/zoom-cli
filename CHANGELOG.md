@@ -40,7 +40,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Survey + token + batch register + in-meeting controls (PR #76): `zoom meetings survey [get/update/delete]`, `zoom meetings token`, `zoom meetings registrants batch`, `zoom meetings control`. Fifth iteration of the depth-first push — closes Meetings to ~80% of Zoom's documented surface.
 > Users status + password + email + token + permissions (PR #77): `zoom users [activate|deactivate|password|email|token|permissions]`. First iteration of the Users depth-first push (~25% → target ~80%).
 > Users schedulers + assistants + presence (PR #78): `zoom users schedulers [list|delete]`, `zoom users assistants [add|delete]`, `zoom users presence [get|set]`. Second iteration of the Users depth-first push.
-> Recordings recover + settings + registrants (this branch): `zoom recordings recover`, `zoom recordings settings [get|update]`, `zoom recordings registrants [list|add|approve|deny]`. First iteration of the Recordings depth-first push (~25% → target ~80%).
+> Recordings recover + settings + registrants (PR #79): `zoom recordings recover`, `zoom recordings settings [get|update]`, `zoom recordings registrants [list|add|approve|deny]`. First iteration of the Recordings depth-first push (~25% → target ~80%).
+> Recordings analytics + registrant questions + archive (this branch): `zoom recordings analytics [summary|details]`, `zoom recordings registrants questions [get|update]`, `zoom recordings archive [list|get|delete]`. Second iteration — closes Recordings to ~80%.
+
+### Added (post-#15 depth-completion: analytics + registrant questions + archive)
+- `zoom recordings analytics summary <meeting-id>` — aggregated viewer metrics (view count, unique viewers, average watch time) for a past-meeting recording. JSON output. Business+ plan.
+- `zoom recordings analytics details <meeting-id>` — per-viewer breakdown (who watched, when, how long). JSON output (nested per-viewer too irregular for TSV). Business+ plan.
+- `zoom recordings registrants questions get <meeting-id>` — print recording-registration form schema (standard + custom questions) as JSON.
+- `zoom recordings registrants questions update <meeting-id> --from-json FILE` — replace the questions array wholesale (PATCH semantics; round-trip via the `get` first).
+- `zoom recordings archive list [--from DATE] [--to DATE]` — paginated TSV (id / meeting_id / topic / archive_date) of Business+ archive files.
+- `zoom recordings archive get <file-id>` — print archive file metadata + per-format download URLs as JSON.
+- `zoom recordings archive delete <file-id>` — permanently remove an archive file. **No trash/recover step here** (unlike standard recordings — flagged in the confirmation prompt).
+- New API helpers: `recordings.get_analytics_summary`, `recordings.get_analytics_details`, `recordings.get_recording_registration_questions`, `recordings.update_recording_registration_questions`, `recordings.list_archive_files` (paginated), `recordings.get_archive_file`, `recordings.delete_archive_file`.
 
 ### Added (post-#15 depth-completion: recover + settings + registrants)
 - `zoom recordings recover <meeting-id> [--file-id ID]` — restore trashed recordings (whole meeting or one specific file). Counterpart to `recordings delete` (which trashes by default; recoverable for 30 days). Confirms by default; `--yes` to skip.

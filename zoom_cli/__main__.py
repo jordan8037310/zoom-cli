@@ -3020,6 +3020,219 @@ _recordings_registrants_approve = _recording_registrant_status_action("approve",
 _recordings_registrants_deny = _recording_registrant_status_action("deny", "Denied")
 
 
+# ---- Recordings depth-completion: analytics + reg questions + archive --
+
+
+@recordings_cmd.group(
+    "analytics",
+    help="Recording viewer analytics for a past meeting (Business+ plan).",
+)
+def recordings_analytics_cmd():
+    """Group for ``zoom recordings analytics ...``."""
+
+
+@recordings_analytics_cmd.command(
+    "summary",
+    help="Aggregated viewer metrics (GET /past_meetings/<id>/recordings/analytics_summary).",
+)
+@click.argument("meeting_id")
+@_translate_keyring_errors
+def recordings_analytics_summary(meeting_id):
+    """JSON output. The summary contains aggregated stats (view_count,
+    unique_viewer_count, average_watch_time, etc.)."""
+    import json as _json
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            data = recordings.get_analytics_summary(client, meeting_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(_json.dumps(data, indent=2))
+
+
+@recordings_analytics_cmd.command(
+    "details",
+    help="Per-viewer breakdown (GET /past_meetings/<id>/recordings/analytics_details).",
+)
+@click.argument("meeting_id")
+@_translate_keyring_errors
+def recordings_analytics_details(meeting_id):
+    """JSON output. The details list nests per-viewer (who watched,
+    when, how long) — too irregular for TSV."""
+    import json as _json
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            data = recordings.get_analytics_details(client, meeting_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(_json.dumps(data, indent=2))
+
+
+@recordings_registrants_cmd.group(
+    "questions",
+    help="Manage the recording registration form (custom questions).",
+)
+def recordings_registrants_questions_cmd():
+    """Group for ``zoom recordings registrants questions ...``."""
+
+
+@recordings_registrants_questions_cmd.command(
+    "get",
+    help="Print the registration form's questions as JSON.",
+)
+@click.argument("meeting_id")
+@_translate_keyring_errors
+def recordings_registrants_questions_get(meeting_id):
+    """Output is raw JSON so it round-trips into ``... questions update --from-json``."""
+    import json as _json
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            data = recordings.get_recording_registration_questions(client, meeting_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(_json.dumps(data, indent=2))
+
+
+@recordings_registrants_questions_cmd.command(
+    "update",
+    help="Replace the registration form's questions (PATCH .../registrants/questions).",
+)
+@click.argument("meeting_id")
+@click.option(
+    "--from-json",
+    "from_json",
+    type=click.File("r", encoding="utf-8"),
+    required=True,
+    help="Read the full questions payload from JSON (or '-' for stdin).",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@_translate_keyring_errors
+def recordings_registrants_questions_update(meeting_id, from_json, yes):
+    """Wholesale-replace semantics — round-trip via ``questions get`` first."""
+    payload = _load_json_payload_or_exit(from_json, label="--from-json input")
+    if not yes and not click.confirm(
+        f"Replace recording registration questions on meeting {meeting_id}?",
+        default=False,
+    ):
+        click.echo("Aborted.")
+        return
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            recordings.update_recording_registration_questions(client, meeting_id, payload)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Updated recording registration questions for meeting {meeting_id}.")
+
+
+@recordings_cmd.group(
+    "archive",
+    help="Manage archive files (Business+ archiving feature).",
+)
+def recordings_archive_cmd():
+    """Group for ``zoom recordings archive ...``."""
+
+
+@recordings_archive_cmd.command(
+    "list",
+    help="List archive files (paginates GET /archive_files).",
+)
+@click.option(
+    "--from",
+    "from_",
+    help="ISO date (YYYY-MM-DD) lower bound on archive date.",
+)
+@click.option(
+    "--to",
+    help="ISO date (YYYY-MM-DD) upper bound on archive date.",
+)
+@click.option(
+    "--page-size",
+    type=click.IntRange(1, 300),
+    default=300,
+    show_default=True,
+    help="Items per page request.",
+)
+@_translate_keyring_errors
+def recordings_archive_list(from_, to, page_size):
+    """TSV output (id\\tmeeting_id\\ttopic\\tarchive_date)."""
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            click.echo("id\tmeeting_id\ttopic\tarchive_date")
+            for af in recordings.list_archive_files(
+                client, from_=from_, to=to, page_size=page_size
+            ):
+                click.echo(
+                    f"{af.get('id', '')}\t"
+                    f"{af.get('meeting_id', '')}\t"
+                    f"{af.get('topic', '')}\t"
+                    f"{af.get('archive_date', af.get('start_time', ''))}"
+                )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+
+
+@recordings_archive_cmd.command(
+    "get",
+    help="Print an archive file's metadata + per-format download URLs as JSON (GET /archive_files/<file-id>).",
+)
+@click.argument("file_id")
+@_translate_keyring_errors
+def recordings_archive_get(file_id):
+    import json as _json
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            data = recordings.get_archive_file(client, file_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(_json.dumps(data, indent=2))
+
+
+@recordings_archive_cmd.command(
+    "delete",
+    help="Permanently delete an archive file (DELETE /archive_files/<file-id>).",
+)
+@click.argument("file_id")
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@_translate_keyring_errors
+def recordings_archive_delete(file_id, yes):
+    """No trash/recover step here — unlike standard recordings, archive
+    file deletion is permanent. Confirms by default; `--yes` to skip."""
+    if not yes and not click.confirm(
+        f"Permanently delete archive file {file_id}? (no recover step)",
+        default=False,
+    ):
+        click.echo("Aborted.")
+        return
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            recordings.delete_archive_file(client, file_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Deleted archive file {file_id}.")
+
+
 # ---- Zoom Dashboard / Metrics ------------------------------------------
 
 

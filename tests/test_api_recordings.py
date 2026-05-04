@@ -288,3 +288,132 @@ def test_allowed_recording_registrant_actions_pinned() -> None:
     """Recording registrants only support approve/deny — no cancel."""
     assert "approve" in recordings.ALLOWED_REGISTRANT_ACTIONS
     assert "deny" in recordings.ALLOWED_REGISTRANT_ACTIONS
+
+
+# ---- depth-completion: analytics + registrant questions + archive ------
+
+
+def test_get_analytics_summary_targets_past_meetings_endpoint() -> None:
+    """Recording analytics live under /past_meetings (not /meetings) —
+    same namespace shape as past_poll_results."""
+    fake_client = MagicMock()
+    fake_client.get.return_value = {
+        "id": 12345,
+        "analytics_summary": [{"name": "view_count", "value": 42}],
+    }
+
+    result = recordings.get_analytics_summary(fake_client, 12345)
+
+    fake_client.get.assert_called_once_with("/past_meetings/12345/recordings/analytics_summary")
+    assert result["analytics_summary"][0]["name"] == "view_count"
+
+
+def test_get_analytics_summary_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {}
+    recordings.get_analytics_summary(fake_client, "evil/../1")
+    arg = fake_client.get.call_args[0][0]
+    assert "/.." not in arg
+    assert "%2F" in arg
+
+
+def test_get_analytics_details_targets_past_meetings_endpoint() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {
+        "id": 12345,
+        "analytics_details": [{"viewer": "a@e.com", "view_time": 120}],
+    }
+
+    result = recordings.get_analytics_details(fake_client, 12345)
+
+    fake_client.get.assert_called_once_with("/past_meetings/12345/recordings/analytics_details")
+    assert result["analytics_details"][0]["viewer"] == "a@e.com"
+
+
+def test_get_recording_registration_questions_targets_correct_path() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {"questions": [], "custom_questions": []}
+
+    result = recordings.get_recording_registration_questions(fake_client, 12345)
+
+    fake_client.get.assert_called_once_with("/meetings/12345/recordings/registrants/questions")
+    assert result == {"questions": [], "custom_questions": []}
+
+
+def test_update_recording_registration_questions_patches_with_payload() -> None:
+    fake_client = MagicMock()
+    fake_client.patch.return_value = {}
+
+    payload = {"questions": [{"field_name": "company", "required": True}]}
+    recordings.update_recording_registration_questions(fake_client, 12345, payload)
+
+    fake_client.patch.assert_called_once_with(
+        "/meetings/12345/recordings/registrants/questions", json=payload
+    )
+
+
+def test_get_archive_file_targets_correct_path() -> None:
+    """Archive files (Business+ archiving feature) sit at /archive_files
+    with a global file_id — no meeting context."""
+    fake_client = MagicMock()
+    fake_client.get.return_value = {
+        "id": "arch-1",
+        "files": [{"file_type": "MP4", "size": 12345}],
+    }
+
+    result = recordings.get_archive_file(fake_client, "arch-1")
+
+    fake_client.get.assert_called_once_with("/archive_files/arch-1")
+    assert result["files"][0]["file_type"] == "MP4"
+
+
+def test_get_archive_file_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {}
+    recordings.get_archive_file(fake_client, "evil/../bad")
+    arg = fake_client.get.call_args[0][0]
+    assert "/.." not in arg
+    assert "%2F" in arg
+
+
+def test_delete_archive_file_targets_correct_path() -> None:
+    fake_client = MagicMock()
+    fake_client.delete.return_value = {}
+
+    recordings.delete_archive_file(fake_client, "arch-1")
+
+    fake_client.delete.assert_called_once_with("/archive_files/arch-1")
+
+
+def test_delete_archive_file_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.delete.return_value = {}
+    recordings.delete_archive_file(fake_client, "evil/../bad")
+    arg = fake_client.delete.call_args[0][0]
+    assert "/.." not in arg
+    assert "%2F" in arg
+
+
+def test_list_archive_files_walks_pagination() -> None:
+    fake_client = MagicMock()
+    fake_client.get.side_effect = [
+        {"archive_files": [{"id": "a-1"}, {"id": "a-2"}], "next_page_token": "tok-2"},
+        {"archive_files": [{"id": "a-3"}], "next_page_token": ""},
+    ]
+
+    result = list(recordings.list_archive_files(fake_client))
+
+    assert result == [{"id": "a-1"}, {"id": "a-2"}, {"id": "a-3"}]
+    first = fake_client.get.call_args_list[0]
+    assert first[0][0] == "/archive_files"
+
+
+def test_list_archive_files_forwards_date_filters() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {"archive_files": [], "next_page_token": ""}
+
+    list(recordings.list_archive_files(fake_client, from_="2026-04-01", to="2026-04-30"))
+
+    params = fake_client.get.call_args_list[0][1]["params"]
+    assert params["from"] == "2026-04-01"
+    assert params["to"] == "2026-04-30"
