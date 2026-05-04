@@ -417,3 +417,85 @@ def set_presence(client: ApiClient, user_id: str, *, status: str) -> dict[str, A
         f"/users/{quote(user_id, safe='')}/presence_status",
         json={"status": status},
     )
+
+
+# ---- depth-completion: update_user + SSO revoke + virtual backgrounds --
+
+
+def update_user(client: ApiClient, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """``PATCH /users/{user_id}`` — partial-update the user profile.
+
+    ``payload`` accepts ``first_name``, ``last_name``, ``type`` (Basic /
+    Licensed / On-prem), ``language``, ``dept``, ``vanity_name``, etc.
+    Zoom's PATCH semantics leave omitted fields untouched.
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``user:write:user``.
+    """
+    return client.patch(f"/users/{quote(user_id, safe='')}", json=payload)
+
+
+def revoke_sso_token(client: ApiClient, user_id: str) -> dict[str, Any]:
+    """``PUT /users/{user_id}/sso_token`` — invalidate every active SSO
+    session for the user. Forces re-authentication on next access.
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``user:write:admin``.
+    """
+    return client.put(f"/users/{quote(user_id, safe='')}/sso_token")
+
+
+def list_virtual_backgrounds(
+    client: ApiClient,
+    user_id: str,
+    *,
+    page_size: int = DEFAULT_PAGE_SIZE,
+) -> Iterator[dict[str, Any]]:
+    """``GET /users/{user_id}/settings/virtual_backgrounds`` — yield
+    every uploaded virtual background across all pages.
+
+    Args:
+        client: Authenticated :class:`ApiClient`.
+        user_id: Zoom user ID or email.
+        page_size: Items per page; see :data:`DEFAULT_PAGE_SIZE`.
+
+    Yields:
+        One file dict per VB (id, name, type, size, is_default, etc.).
+
+    Required scopes: ``user:read:settings``.
+    """
+    return paginate(
+        client,
+        f"/users/{quote(user_id, safe='')}/settings/virtual_backgrounds",
+        item_key="files",
+        params={},
+        page_size=page_size,
+    )
+
+
+def delete_virtual_backgrounds(
+    client: ApiClient, user_id: str, *, ids: list[str]
+) -> dict[str, Any]:
+    """``DELETE /users/{user_id}/settings/virtual_backgrounds?ids=...`` —
+    delete one or more VBs by their file ID.
+
+    Zoom takes a comma-separated ``ids`` query parameter (NOT a JSON
+    body). The helper builds the CSV.
+
+    Args:
+        client: Authenticated :class:`ApiClient`.
+        user_id: Zoom user ID or email.
+        ids: Non-empty list of VB file IDs to delete.
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``user:write:settings``.
+    """
+    if not ids:
+        raise ValueError("ids must contain at least one VB file ID")
+    return client.delete(
+        f"/users/{quote(user_id, safe='')}/settings/virtual_backgrounds",
+        params={"ids": ",".join(ids)},
+    )

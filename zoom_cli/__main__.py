@@ -1335,6 +1335,186 @@ def users_presence_set(user_id, status):
     click.echo(f"Set presence for user {user_id} -> {status}.")
 
 
+# ---- Users depth-completion: update + sso-revoke + virtual-backgrounds --
+
+
+@users_cmd.command(
+    "update",
+    help="Update a user's profile (PATCH /users/<user-id>).",
+)
+@click.argument("user_id")
+@click.option("--first-name", help="New first name.")
+@click.option("--last-name", help="New last name.")
+@click.option(
+    "--type",
+    "user_type",
+    type=click.IntRange(1, 3),
+    help="1=Basic, 2=Licensed, 3=On-prem.",
+)
+@click.option("--language", help="Locale (e.g. en-US).")
+@click.option("--dept", help="Department.")
+@click.option("--vanity-name", help="Vanity URL prefix (Pro+).")
+@click.option(
+    "--from-json",
+    "from_json",
+    type=click.File("r", encoding="utf-8"),
+    default=None,
+    help="Read full user-update body from JSON. Mutually exclusive with the per-field flags.",
+)
+@_translate_keyring_errors
+def users_update(user_id, first_name, last_name, user_type, language, dept, vanity_name, from_json):
+    """Two payload-construction modes (mirrors the rest of the CLI):
+
+    1. Per-field flags — at least one must be passed.
+    2. ``--from-json FILE`` — full Zoom PATCH body."""
+    field_flags = (first_name, last_name, user_type, language, dept, vanity_name)
+    any_field_flag = any(f is not None for f in field_flags)
+
+    if from_json is not None:
+        if any_field_flag:
+            click.echo(
+                "--from-json is mutually exclusive with the per-field flags.",
+                err=True,
+            )
+            raise click.exceptions.Exit(code=1)
+        payload = _load_json_payload_or_exit(from_json, label="--from-json input")
+    else:
+        payload = {}
+        if first_name is not None:
+            payload["first_name"] = first_name
+        if last_name is not None:
+            payload["last_name"] = last_name
+        if user_type is not None:
+            payload["type"] = user_type
+        if language is not None:
+            payload["language"] = language
+        if dept is not None:
+            payload["dept"] = dept
+        if vanity_name is not None:
+            payload["vanity_name"] = vanity_name
+        if not payload:
+            click.echo(
+                "Nothing to update — pass at least one --field, or --from-json.",
+                err=True,
+            )
+            raise click.exceptions.Exit(code=1)
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            users.update_user(client, user_id, payload)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Updated user {user_id}.")
+
+
+@users_cmd.command(
+    "revoke-sso",
+    help="Invalidate the user's active SSO sessions (PUT /users/<user-id>/sso_token).",
+)
+@click.argument("user_id")
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@_translate_keyring_errors
+def users_revoke_sso(user_id, yes):
+    """Forces re-auth on the user's next access. Confirms by default
+    since this is a user-visible disruption."""
+    if not yes and not click.confirm(
+        f"Revoke all SSO sessions for user {user_id}?",
+        default=False,
+    ):
+        click.echo("Aborted.")
+        return
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            users.revoke_sso_token(client, user_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Revoked SSO sessions for user {user_id}.")
+
+
+@users_cmd.group(
+    "virtual-backgrounds",
+    help="Manage a user's uploaded virtual backgrounds.",
+)
+def users_vb_cmd():
+    """Group for ``zoom users virtual-backgrounds ...``."""
+
+
+@users_vb_cmd.command(
+    "list",
+    help="List a user's virtual backgrounds (paginates GET /users/<user-id>/settings/virtual_backgrounds).",
+)
+@click.argument("user_id")
+@click.option(
+    "--page-size",
+    type=click.IntRange(1, 300),
+    default=300,
+    show_default=True,
+    help="Items per page request.",
+)
+@_translate_keyring_errors
+def users_vb_list(user_id, page_size):
+    """TSV output (id\\tname\\ttype\\tsize\\tis_default)."""
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            click.echo("id\tname\ttype\tsize\tis_default")
+            for vb in users.list_virtual_backgrounds(client, user_id, page_size=page_size):
+                click.echo(
+                    f"{vb.get('id', '')}\t"
+                    f"{vb.get('name', '')}\t"
+                    f"{vb.get('type', '')}\t"
+                    f"{vb.get('size', '')}\t"
+                    f"{vb.get('is_default', '')}"
+                )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+
+
+@users_vb_cmd.command(
+    "delete",
+    help="Delete one or more virtual backgrounds by file ID.",
+)
+@click.argument("user_id")
+@click.option(
+    "--id",
+    "ids",
+    multiple=True,
+    required=True,
+    help="VB file ID. Repeat for bulk delete.",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@_translate_keyring_errors
+def users_vb_delete(user_id, ids, yes):
+    id_list = list(ids)
+    if not yes and not click.confirm(
+        f"Delete {len(id_list)} virtual background(s) for user {user_id}?",
+        default=False,
+    ):
+        click.echo("Aborted.")
+        return
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            users.delete_virtual_backgrounds(client, user_id, ids=id_list)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Deleted {len(id_list)} virtual background(s) for user {user_id}.")
+
+
 # ---- Zoom Meetings — write commands -------------------------------------
 #
 # Closes #13 (write piece). Confirmation-flow design mirrors `zoom rm`:

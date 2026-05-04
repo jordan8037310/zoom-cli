@@ -41,7 +41,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Users status + password + email + token + permissions (PR #77): `zoom users [activate|deactivate|password|email|token|permissions]`. First iteration of the Users depth-first push (~25% → target ~80%).
 > Users schedulers + assistants + presence (PR #78): `zoom users schedulers [list|delete]`, `zoom users assistants [add|delete]`, `zoom users presence [get|set]`. Second iteration of the Users depth-first push.
 > Recordings recover + settings + registrants (PR #79): `zoom recordings recover`, `zoom recordings settings [get|update]`, `zoom recordings registrants [list|add|approve|deny]`. First iteration of the Recordings depth-first push (~25% → target ~80%).
-> Recordings analytics + registrant questions + archive (this branch): `zoom recordings analytics [summary|details]`, `zoom recordings registrants questions [get|update]`, `zoom recordings archive [list|get|delete]`. Second iteration — closes Recordings to ~80%.
+> Recordings analytics + registrant questions + archive (PR #80): `zoom recordings analytics [summary|details]`, `zoom recordings registrants questions [get|update]`, `zoom recordings archive [list|get|delete]`. Second iteration — closes Recordings to ~80%.
+> Users update + revoke-sso + virtual-backgrounds list/delete (this branch): `zoom users update`, `zoom users revoke-sso`, `zoom users virtual-backgrounds [list|delete]`. Third iteration of the Users depth-first push — closes Users to ~80% (multipart-upload for VB upload deferred as a separate iter).
+
+### Added (post-#14 depth-completion: update + sso revoke + virtual backgrounds)
+- `zoom users update <user-id>` — partial profile update (PATCH /users/<id>). Per-field flags (`--first-name`, `--last-name`, `--type`, `--language`, `--dept`, `--vanity-name`) OR `--from-json FILE`; mutually exclusive. Rejects empty payload.
+- `zoom users revoke-sso <user-id>` — invalidate every active SSO session (forces re-auth). Confirms by default since this is a user-visible disruption.
+- `zoom users virtual-backgrounds list <user-id>` — paginated TSV (id / name / type / size / is_default).
+- `zoom users virtual-backgrounds delete <user-id> --id ID [--id ID ...]` — bulk delete by file ID. Builds Zoom's CSV `ids=` query param; rejects empty list. Confirms by default.
+- New API helpers: `users.update_user`, `users.revoke_sso_token`, `users.list_virtual_backgrounds` (paginated), `users.delete_virtual_backgrounds` (CSV `ids` query param).
 
 ### Added (post-#15 depth-completion: analytics + registrant questions + archive)
 - `zoom recordings analytics summary <meeting-id>` — aggregated viewer metrics (view count, unique viewers, average watch time) for a past-meeting recording. JSON output. Business+ plan.
