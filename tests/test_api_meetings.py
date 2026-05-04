@@ -330,3 +330,122 @@ def test_allowed_registrant_actions_pinned() -> None:
     assert "approve" in meetings.ALLOWED_REGISTRANT_ACTIONS
     assert "deny" in meetings.ALLOWED_REGISTRANT_ACTIONS
     assert "cancel" in meetings.ALLOWED_REGISTRANT_ACTIONS
+
+
+# ---- polls depth-completion (post-#13 follow-up) --------------------------
+
+
+def test_list_polls_targets_meeting_path() -> None:
+    """Polls list is a single GET (not paginated — Zoom returns the
+    entire poll set inline) so we surface the raw envelope."""
+    fake_client = MagicMock()
+    fake_client.get.return_value = {
+        "total_records": 1,
+        "polls": [{"id": "p-1", "title": "Q1"}],
+    }
+
+    result = meetings.list_polls(fake_client, 123)
+
+    fake_client.get.assert_called_once_with("/meetings/123/polls")
+    assert result["polls"][0]["id"] == "p-1"
+
+
+def test_list_polls_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {"polls": []}
+
+    meetings.list_polls(fake_client, "evil/../99")
+    arg = fake_client.get.call_args[0][0]
+    assert "/.." not in arg
+    assert "%2F" in arg
+
+
+def test_get_poll_targets_correct_path() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {"id": "p-1", "title": "Q1"}
+
+    result = meetings.get_poll(fake_client, 123, "p-1")
+
+    fake_client.get.assert_called_once_with("/meetings/123/polls/p-1")
+    assert result["id"] == "p-1"
+
+
+def test_get_poll_url_encodes_both_segments() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {}
+
+    meetings.get_poll(fake_client, "m/../1", "p/../2")
+    arg = fake_client.get.call_args[0][0]
+    # Each segment has 2 slashes → 2*2 == 4 encoded chars total.
+    assert arg.count("%2F") == 4
+    assert "/.." not in arg
+
+
+def test_create_poll_posts_payload() -> None:
+    fake_client = MagicMock()
+    fake_client.post.return_value = {"id": "p-new", "title": "T"}
+
+    payload = {
+        "title": "T",
+        "questions": [{"name": "Q1", "type": "single", "answers": ["A", "B"]}],
+    }
+    result = meetings.create_poll(fake_client, 123, payload)
+
+    fake_client.post.assert_called_once_with("/meetings/123/polls", json=payload)
+    assert result["id"] == "p-new"
+
+
+def test_update_poll_puts_full_payload() -> None:
+    """Per Zoom's spec the poll update is a PUT (full replace) — make
+    that explicit in the helper rather than masquerading as PATCH."""
+    fake_client = MagicMock()
+    fake_client.put.return_value = {}
+
+    payload = {"title": "T2", "questions": []}
+    meetings.update_poll(fake_client, 123, "p-1", payload)
+
+    fake_client.put.assert_called_once_with("/meetings/123/polls/p-1", json=payload)
+
+
+def test_update_poll_url_encodes_both_segments() -> None:
+    fake_client = MagicMock()
+    fake_client.put.return_value = {}
+
+    meetings.update_poll(fake_client, "m/../1", "p/../2", {"title": ""})
+    arg = fake_client.put.call_args[0][0]
+    assert arg.count("%2F") == 4
+    assert "/.." not in arg
+
+
+def test_delete_poll_targets_correct_path() -> None:
+    fake_client = MagicMock()
+    fake_client.delete.return_value = {}
+
+    meetings.delete_poll(fake_client, 123, "p-1")
+
+    fake_client.delete.assert_called_once_with("/meetings/123/polls/p-1")
+
+
+def test_delete_poll_url_encodes_both_segments() -> None:
+    fake_client = MagicMock()
+    fake_client.delete.return_value = {}
+
+    meetings.delete_poll(fake_client, "m/../1", "p/../2")
+    arg = fake_client.delete.call_args[0][0]
+    assert arg.count("%2F") == 4
+    assert "/.." not in arg
+
+
+def test_list_past_poll_results_targets_past_meetings_endpoint() -> None:
+    """Past-meeting poll RESULTS live under /past_meetings (not /meetings) —
+    different namespace, identical resource shape."""
+    fake_client = MagicMock()
+    fake_client.get.return_value = {
+        "id": 123,
+        "questions": [{"name": "Q1", "question_details": []}],
+    }
+
+    result = meetings.list_past_poll_results(fake_client, 123)
+
+    fake_client.get.assert_called_once_with("/past_meetings/123/polls")
+    assert "questions" in result
