@@ -4625,3 +4625,217 @@ def test_users_presence_set_rejects_unknown_status(
     result = runner.invoke(main, ["users", "presence", "set", "u-1", "DND"])
     assert result.exit_code != 0
     assert "DND" in result.output or "Invalid value" in result.output
+
+
+# ---- recordings depth-completion: recover / settings / registrants -----
+
+
+def test_recordings_recover_all_yes_calls_recover_recordings(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_recover(_client, mid):
+        captured["mid"] = mid
+        captured["whole"] = True
+
+    def fake_recover_file(_client, mid, fid):
+        captured["file"] = (mid, fid)
+
+    _patch_recordings_module(
+        monkeypatch,
+        recover_recordings=fake_recover,
+        recover_recording_file=fake_recover_file,
+    )
+    result = runner.invoke(main, ["recordings", "recover", "12345", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured.get("mid") == "12345"
+    assert captured.get("whole") is True
+    assert "file" not in captured
+    assert "all trashed recordings" in result.output
+
+
+def test_recordings_recover_specific_file_yes_calls_file_endpoint(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_recover_file(_client, mid, fid):
+        captured["file"] = (mid, fid)
+
+    _patch_recordings_module(
+        monkeypatch,
+        recover_recordings=lambda *_a, **_k: None,
+        recover_recording_file=fake_recover_file,
+    )
+    result = runner.invoke(main, ["recordings", "recover", "12345", "--file-id", "rec-1", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured["file"] == ("12345", "rec-1")
+    assert "Recovered recording rec-1" in result.output
+
+
+def test_recordings_recover_confirms_and_aborts(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    called = {"n": 0}
+    _patch_recordings_module(
+        monkeypatch,
+        recover_recordings=lambda *_a, **_k: called.__setitem__("n", called["n"] + 1),
+        recover_recording_file=lambda *_a, **_k: None,
+    )
+    result = runner.invoke(main, ["recordings", "recover", "12345"], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    assert called["n"] == 0
+
+
+def test_recordings_settings_get_prints_json(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    payload = {"share_recording": "publicly", "viewer_download": True}
+
+    def fake_get(_client, mid):
+        assert mid == "12345"
+        return payload
+
+    _patch_recordings_module(monkeypatch, get_recording_settings=fake_get)
+    result = runner.invoke(main, ["recordings", "settings", "get", "12345"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    assert _json.loads(result.output) == payload
+
+
+def test_recordings_settings_update_yes_calls_patch(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "rs.json"
+    json_file.write_text('{"share_recording": "internally"}')
+    captured: dict[str, object] = {}
+
+    def fake_update(_client, mid, payload):
+        captured["mid"] = mid
+        captured["payload"] = payload
+
+    _patch_recordings_module(monkeypatch, update_recording_settings=fake_update)
+    result = runner.invoke(
+        main,
+        [
+            "recordings",
+            "settings",
+            "update",
+            "12345",
+            "--from-json",
+            str(json_file),
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["mid"] == "12345"
+    assert captured["payload"] == {"share_recording": "internally"}
+    assert "Updated recording settings" in result.output
+
+
+def test_recordings_registrants_list_prints_tsv(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, mid, *, status, page_size):
+        assert (mid, status) == ("12345", "pending")
+        return iter(
+            [
+                {
+                    "id": "r-1",
+                    "email": "a@e.com",
+                    "first_name": "A",
+                    "last_name": "Z",
+                    "status": "pending",
+                },
+            ]
+        )
+
+    _patch_recordings_module(monkeypatch, list_recording_registrants=fake_list)
+    result = runner.invoke(main, ["recordings", "registrants", "list", "12345"])
+    assert result.exit_code == 0, result.output
+    assert "id\temail\tfirst_name\tlast_name\tstatus" in result.output
+    assert "r-1\ta@e.com\tA\tZ\tpending" in result.output
+
+
+def test_recordings_registrants_add_field_flags_build_payload(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_add(_client, mid, payload):
+        captured["mid"] = mid
+        captured["payload"] = payload
+        return {"id": "r-1", "share_url": "https://zoom.us/rec/share/abc"}
+
+    _patch_recordings_module(monkeypatch, add_recording_registrant=fake_add)
+    result = runner.invoke(
+        main,
+        [
+            "recordings",
+            "registrants",
+            "add",
+            "12345",
+            "--email",
+            "a@e.com",
+            "--first-name",
+            "A",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["payload"] == {"email": "a@e.com", "first_name": "A"}
+    assert "share_url" in result.output
+    assert "https://zoom.us/rec/share/abc" in result.output
+
+
+@pytest.mark.parametrize(
+    "subcmd,expected_action,past",
+    [
+        ("approve", "approve", "Approved"),
+        ("deny", "deny", "Denied"),
+    ],
+)
+def test_recordings_registrants_status_actions_send_correct_action(
+    runner: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    subcmd: str,
+    expected_action: str,
+    past: str,
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_update(_client, mid, *, action, registrant_ids):
+        captured["mid"] = mid
+        captured["action"] = action
+        captured["registrant_ids"] = list(registrant_ids)
+
+    _patch_recordings_module(monkeypatch, update_recording_registrant_status=fake_update)
+    result = runner.invoke(
+        main,
+        [
+            "recordings",
+            "registrants",
+            subcmd,
+            "12345",
+            "--registrant",
+            "r-1",
+            "--registrant",
+            "r-2",
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["action"] == expected_action
+    assert captured["registrant_ids"] == ["r-1", "r-2"]
+    assert past in result.output

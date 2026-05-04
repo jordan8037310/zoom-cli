@@ -39,7 +39,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Past instances + invitation + recover (PR #75): `zoom meetings invitation`, `zoom meetings recover`, and a new `zoom meetings past` subgroup with `instances / get / participants`. Fourth iteration of the depth-first push.
 > Survey + token + batch register + in-meeting controls (PR #76): `zoom meetings survey [get/update/delete]`, `zoom meetings token`, `zoom meetings registrants batch`, `zoom meetings control`. Fifth iteration of the depth-first push — closes Meetings to ~80% of Zoom's documented surface.
 > Users status + password + email + token + permissions (PR #77): `zoom users [activate|deactivate|password|email|token|permissions]`. First iteration of the Users depth-first push (~25% → target ~80%).
-> Users schedulers + assistants + presence (this branch): `zoom users schedulers [list|delete]`, `zoom users assistants [add|delete]`, `zoom users presence [get|set]`. Second iteration of the Users depth-first push.
+> Users schedulers + assistants + presence (PR #78): `zoom users schedulers [list|delete]`, `zoom users assistants [add|delete]`, `zoom users presence [get|set]`. Second iteration of the Users depth-first push.
+> Recordings recover + settings + registrants (this branch): `zoom recordings recover`, `zoom recordings settings [get|update]`, `zoom recordings registrants [list|add|approve|deny]`. First iteration of the Recordings depth-first push (~25% → target ~80%).
+
+### Added (post-#15 depth-completion: recover + settings + registrants)
+- `zoom recordings recover <meeting-id> [--file-id ID]` — restore trashed recordings (whole meeting or one specific file). Counterpart to `recordings delete` (which trashes by default; recoverable for 30 days). Confirms by default; `--yes` to skip.
+- `zoom recordings settings get <meeting-id>` — print recording sharing/permission settings as JSON.
+- `zoom recordings settings update <meeting-id> --from-json FILE` — JSON-only because settings nest deep (share_recording / viewer_download / on_demand / password / authentication / etc.). Confirms by default.
+- `zoom recordings registrants list <meeting-id> [--status pending|approved|denied]` — paginated TSV of on-demand recording viewer registrations.
+- `zoom recordings registrants add <meeting-id>` — register a viewer (per-field flags OR `--from-json`; mutually exclusive). Returns the per-viewer `share_url`.
+- `zoom recordings registrants approve|deny <meeting-id> --registrant ID [--registrant ID ...]` — bulk status change. Note: recording registrants only support approve/deny — no `cancel` (unlike meeting registrants). Confirms by default.
+- New API helpers: `recordings.recover_recordings`, `recordings.recover_recording_file`, `recordings.get_recording_settings`, `recordings.update_recording_settings`, `recordings.list_recording_registrants` (paginated), `recordings.add_recording_registrant`, `recordings.update_recording_registrant_status`. New pinned-tuple constants `recordings.ALLOWED_REGISTRANT_STATUSES` and `recordings.ALLOWED_REGISTRANT_ACTIONS = ("approve", "deny")`.
 
 ### Added (post-#14 depth-completion: schedulers + assistants + presence)
 - `zoom users schedulers list <user-id>` — TSV (id / email) of users authorized to schedule meetings on this user's behalf.

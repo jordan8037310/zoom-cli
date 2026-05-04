@@ -2759,6 +2759,267 @@ def recordings_delete(meeting_id, file_id, action, yes, dry_run):
     click.echo(f"{verb} {target}.")
 
 
+# ---- Recordings depth-completion: recover + settings + registrants -----
+
+
+@recordings_cmd.command(
+    "recover",
+    help="Restore trashed recordings (PUT /meetings/<id>/recordings[/<file-id>]/status, action=recover).",
+)
+@click.argument("meeting_id")
+@click.option(
+    "--file-id",
+    "file_id",
+    default=None,
+    help="Recover only this specific recording file. If omitted, all of the meeting's trashed recordings are recovered.",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@_translate_keyring_errors
+def recordings_recover(meeting_id, file_id, yes):
+    """Counterpart to ``recordings delete`` (which trashes by default).
+    Trashed recordings stay recoverable for 30 days."""
+    target = (
+        f"recording {file_id} in meeting {meeting_id}"
+        if file_id
+        else f"all trashed recordings in meeting {meeting_id}"
+    )
+    if not yes and not click.confirm(f"Recover {target}?", default=False):
+        click.echo("Aborted.")
+        return
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            if file_id:
+                recordings.recover_recording_file(client, meeting_id, file_id)
+            else:
+                recordings.recover_recordings(client, meeting_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Recovered {target}.")
+
+
+@recordings_cmd.group(
+    "settings",
+    help="Read or update a meeting's recording sharing/permission settings.",
+)
+def recordings_settings_cmd():
+    """Group for ``zoom recordings settings ...``."""
+
+
+@recordings_settings_cmd.command(
+    "get",
+    help="Print recording settings as JSON (GET /meetings/<id>/recordings/settings).",
+)
+@click.argument("meeting_id")
+@_translate_keyring_errors
+def recordings_settings_get(meeting_id):
+    """JSON output so it round-trips into ``settings update --from-json``."""
+    import json as _json
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            data = recordings.get_recording_settings(client, meeting_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(_json.dumps(data, indent=2))
+
+
+@recordings_settings_cmd.command(
+    "update",
+    help="Update recording settings (PATCH /meetings/<id>/recordings/settings).",
+)
+@click.argument("meeting_id")
+@click.option(
+    "--from-json",
+    "from_json",
+    type=click.File("r", encoding="utf-8"),
+    required=True,
+    help="Read the settings body from JSON (or '-' for stdin).",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@_translate_keyring_errors
+def recordings_settings_update(meeting_id, from_json, yes):
+    """Recording settings nest deep (share_recording / viewer_download /
+    on_demand / password / authentication / etc.) — JSON-only by design.
+    Round-trip via ``settings get`` first."""
+    payload = _load_json_payload_or_exit(from_json, label="--from-json input")
+    if not yes and not click.confirm(
+        f"Update recording settings on meeting {meeting_id}?",
+        default=False,
+    ):
+        click.echo("Aborted.")
+        return
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            recordings.update_recording_settings(client, meeting_id, payload)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Updated recording settings for meeting {meeting_id}.")
+
+
+@recordings_cmd.group(
+    "registrants",
+    help="Manage on-demand recording viewer registrants.",
+)
+def recordings_registrants_cmd():
+    """Group for ``zoom recordings registrants ...``."""
+
+
+@recordings_registrants_cmd.command(
+    "list",
+    help="List on-demand recording registrants (paginates GET /meetings/<id>/recordings/registrants).",
+)
+@click.argument("meeting_id")
+@click.option(
+    "--status",
+    type=click.Choice(list(recordings.ALLOWED_REGISTRANT_STATUSES)),
+    default="pending",
+    show_default=True,
+    help="Filter by registration status.",
+)
+@click.option(
+    "--page-size",
+    type=click.IntRange(1, 300),
+    default=300,
+    show_default=True,
+    help="Items per page request.",
+)
+@_translate_keyring_errors
+def recordings_registrants_list(meeting_id, status, page_size):
+    """TSV output (id\\temail\\tfirst_name\\tlast_name\\tstatus)."""
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            click.echo("id\temail\tfirst_name\tlast_name\tstatus")
+            for r in recordings.list_recording_registrants(
+                client, meeting_id, status=status, page_size=page_size
+            ):
+                click.echo(
+                    f"{r.get('id', '')}\t"
+                    f"{r.get('email', '')}\t"
+                    f"{r.get('first_name', '')}\t"
+                    f"{r.get('last_name', '')}\t"
+                    f"{r.get('status', '')}"
+                )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+
+
+@recordings_registrants_cmd.command(
+    "add",
+    help="Register a viewer for an on-demand recording (POST /meetings/<id>/recordings/registrants).",
+)
+@click.argument("meeting_id")
+@click.option(
+    "--from-json",
+    "from_json",
+    type=click.File("r", encoding="utf-8"),
+    default=None,
+    help="Read the full registration body from JSON (or '-' for stdin). Mutually exclusive with --email / --first-name / --last-name.",
+)
+@click.option("--email", help="Registrant email (required unless --from-json).")
+@click.option("--first-name", help="Registrant first name (required unless --from-json).")
+@click.option("--last-name", help="Registrant last name (optional).")
+@_translate_keyring_errors
+def recordings_registrants_add(meeting_id, from_json, email, first_name, last_name):
+    """Same two-mode payload pattern as meetings registrants add."""
+    field_flags = (email, first_name, last_name)
+    any_field_flag = any(f is not None for f in field_flags)
+
+    if from_json is not None:
+        if any_field_flag:
+            click.echo(
+                "--from-json is mutually exclusive with --email / --first-name / --last-name.",
+                err=True,
+            )
+            raise click.exceptions.Exit(code=1)
+        payload = _load_json_payload_or_exit(from_json, label="--from-json input")
+    else:
+        if not email or not first_name:
+            click.echo(
+                "Either (--email AND --first-name) or --from-json is required.",
+                err=True,
+            )
+            raise click.exceptions.Exit(code=1)
+        payload = {"email": email, "first_name": first_name}
+        if last_name:
+            payload["last_name"] = last_name
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            result = recordings.add_recording_registrant(client, meeting_id, payload)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Registered. id: {result.get('id', '')}")
+    if "share_url" in result:
+        click.echo(f"share_url: {result['share_url']}")
+
+
+def _recording_registrant_status_action(action: str, action_past: str):
+    """Build one of the ``approve`` / ``deny`` subcommands. Recording
+    registrants don't have ``cancel`` (unlike meeting registrants)."""
+
+    @recordings_registrants_cmd.command(
+        action,
+        help=f"{action.capitalize()} one or more recording registrants.",
+    )
+    @click.argument("meeting_id")
+    @click.option(
+        "--registrant",
+        "registrant_ids",
+        multiple=True,
+        required=True,
+        help="Registrant ID. Repeat for bulk action.",
+    )
+    @click.option(
+        "--yes",
+        "-y",
+        is_flag=True,
+        default=False,
+        help="Skip the confirmation prompt.",
+    )
+    @_translate_keyring_errors
+    def _cmd(meeting_id, registrant_ids, yes):
+        ids = list(registrant_ids)
+        if not yes and not click.confirm(
+            f"{action.capitalize()} {len(ids)} recording registrant(s) on meeting {meeting_id}?",
+            default=False,
+        ):
+            click.echo("Aborted.")
+            return
+        creds = _load_creds_or_exit()
+        try:
+            with _build_api_client(creds) as client:
+                recordings.update_recording_registrant_status(
+                    client, meeting_id, action=action, registrant_ids=ids
+                )
+        except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+            _exit_on_api_error(exc)
+        click.echo(f"{action_past} {len(ids)} recording registrant(s) on meeting {meeting_id}.")
+
+    _cmd.__name__ = f"recordings_registrants_{action}"
+    return _cmd
+
+
+_recordings_registrants_approve = _recording_registrant_status_action("approve", "Approved")
+_recordings_registrants_deny = _recording_registrant_status_action("deny", "Denied")
+
+
 # ---- Zoom Dashboard / Metrics ------------------------------------------
 
 
