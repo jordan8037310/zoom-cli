@@ -5240,3 +5240,165 @@ def test_users_vb_delete_confirms_and_aborts(
     assert result.exit_code == 0, result.output
     assert "Aborted" in result.output
     assert called["n"] == 0
+
+
+# ---- --output json (cross-cutting; converts list/get/me commands) ------
+
+
+def test_output_json_users_me_emits_json_object(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_me(_client):
+        return {
+            "id": "u-1",
+            "email": "alice@example.com",
+            "type": 2,
+            "status": "active",
+            "display_name": "Alice",
+            "account_id": "acct-x",
+            "extra_field": "ignored-in-text-but-kept-in-json",
+        }
+
+    _patch_users_module(monkeypatch, get_me=fake_me)
+    result = runner.invoke(main, ["--output", "json", "users", "me"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    # JSON includes the FULL object (not just the printed fields) so it
+    # round-trips into other API calls.
+    assert parsed["id"] == "u-1"
+    assert parsed["email"] == "alice@example.com"
+    assert parsed["extra_field"] == "ignored-in-text-but-kept-in-json"
+
+
+def test_output_json_users_list_emits_json_array(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, *, status, page_size):
+        return iter(
+            [
+                {"id": "u-1", "email": "a@e.com", "type": 1, "status": "active"},
+                {"id": "u-2", "email": "b@e.com", "type": 2, "status": "active"},
+            ]
+        )
+
+    _patch_users_module(monkeypatch, list_users=fake_list)
+    result = runner.invoke(main, ["--output", "json", "users", "list"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert isinstance(parsed, list)
+    assert len(parsed) == 2
+    # JSON keys use Zoom's API field names (`id`), not the legacy
+    # `user_id` TSV header — so callers can pipe straight into other
+    # API calls.
+    assert parsed[0] == {"id": "u-1", "email": "a@e.com", "type": 1, "status": "active"}
+
+
+def test_output_json_meetings_list_emits_json_array(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, *, user_id, meeting_type, page_size):
+        return iter(
+            [
+                {"id": 100, "topic": "Daily", "type": 2, "start_time": "T1", "duration": 30},
+                {"id": 200, "topic": "Weekly", "type": 8, "start_time": "T2", "duration": 60},
+            ]
+        )
+
+    _patch_meetings_module(monkeypatch, list_meetings=fake_list)
+    result = runner.invoke(main, ["--output", "json", "meetings", "list"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert len(parsed) == 2
+    assert parsed[0]["topic"] == "Daily"
+    assert parsed[1]["duration"] == 60
+
+
+def test_output_json_meetings_get_emits_json_object(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    payload = {
+        "id": 12345,
+        "topic": "T",
+        "type": 2,
+        "status": "started",
+        "start_time": "T1",
+        "duration": 30,
+        "join_url": "https://zoom.us/j/12345",
+    }
+
+    def fake_get(_client, mid):
+        return payload
+
+    _patch_meetings_module(monkeypatch, get_meeting=fake_get)
+    result = runner.invoke(main, ["--output", "json", "meetings", "get", "12345"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    assert _json.loads(result.output) == payload
+
+
+def test_output_json_recordings_list_emits_json_array_with_file_count(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """recordings list augments each row with a derived ``file_count``
+    field — JSON output includes it under that key (not the raw
+    ``recording_files`` array)."""
+    _save_creds()
+
+    def fake_list(_client, *, user_id, from_, to, page_size):
+        return iter(
+            [
+                {
+                    "uuid": "u-1",
+                    "id": 100,
+                    "topic": "Daily",
+                    "start_time": "T1",
+                    "recording_files": [{"id": "r-1"}, {"id": "r-2"}],
+                },
+            ]
+        )
+
+    _patch_recordings_module(monkeypatch, list_recordings=fake_list)
+    result = runner.invoke(main, ["--output", "json", "recordings", "list"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert parsed[0]["uuid"] == "u-1"
+    assert parsed[0]["file_count"] == 2
+
+
+def test_output_text_default_is_unchanged(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without --output (or with --output text), the historical TSV
+    behaviour is preserved — header text matches the pre-#82 contract."""
+    _save_creds()
+
+    def fake_list(_client, *, status, page_size):
+        return iter(
+            [
+                {"id": "u-1", "email": "a@e.com", "type": 1, "status": "active"},
+            ]
+        )
+
+    _patch_users_module(monkeypatch, list_users=fake_list)
+    result = runner.invoke(main, ["users", "list"])
+    assert result.exit_code == 0, result.output
+    lines = result.output.strip().split("\n")
+    # Header still uses the legacy `user_id` name (not `id` from JSON).
+    assert lines[0] == "user_id\temail\ttype\tstatus"
+    assert lines[1] == "u-1\ta@e.com\t1\tactive"
