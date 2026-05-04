@@ -1883,6 +1883,204 @@ def test_meetings_polls_results_prints_json(
     assert _json.loads(result.output) == payload
 
 
+# ---- meeting livestream (depth-completion follow-up to #13) ------------
+
+
+def test_meetings_livestream_get_prints_fields(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_get(_client, meeting_id):
+        assert meeting_id == "12345"
+        return {
+            "stream_url": "rtmp://example.com/live",
+            "stream_key": "secretkey",
+            "page_url": "https://example.com/watch",
+        }
+
+    _patch_meetings_module(monkeypatch, get_livestream=fake_get)
+    result = runner.invoke(main, ["meetings", "livestream", "get", "12345"])
+    assert result.exit_code == 0, result.output
+    assert "stream_url: rtmp://example.com/live" in result.output
+    assert "stream_key: secretkey" in result.output
+    assert "page_url: https://example.com/watch" in result.output
+
+
+def test_meetings_livestream_update_field_flags_build_payload(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_update(_client, meeting_id, payload):
+        captured["meeting_id"] = meeting_id
+        captured["payload"] = payload
+
+    _patch_meetings_module(monkeypatch, update_livestream=fake_update)
+    result = runner.invoke(
+        main,
+        [
+            "meetings",
+            "livestream",
+            "update",
+            "12345",
+            "--stream-url",
+            "rtmp://example.com/live",
+            "--stream-key",
+            "k",
+            "--page-url",
+            "https://example.com/watch",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["meeting_id"] == "12345"
+    assert captured["payload"] == {
+        "stream_url": "rtmp://example.com/live",
+        "stream_key": "k",
+        "page_url": "https://example.com/watch",
+    }
+
+
+def test_meetings_livestream_update_rejects_no_fields(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    _patch_meetings_module(monkeypatch, update_livestream=lambda *_a, **_k: None)
+    result = runner.invoke(main, ["meetings", "livestream", "update", "12345"])
+    assert result.exit_code == 1
+    assert "Nothing to update" in result.output
+
+
+def test_meetings_livestream_update_from_json_mutually_exclusive(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "ls.json"
+    json_file.write_text('{"stream_url": "rtmp://a"}')
+    _patch_meetings_module(monkeypatch, update_livestream=lambda *_a, **_k: None)
+    result = runner.invoke(
+        main,
+        [
+            "meetings",
+            "livestream",
+            "update",
+            "12345",
+            "--from-json",
+            str(json_file),
+            "--stream-url",
+            "rtmp://other",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "mutually exclusive" in result.output
+
+
+def test_meetings_livestream_start_yes_sends_action_and_settings(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_status(_client, meeting_id, *, action, settings):
+        captured["meeting_id"] = meeting_id
+        captured["action"] = action
+        captured["settings"] = settings
+
+    _patch_meetings_module(monkeypatch, update_livestream_status=fake_status)
+    result = runner.invoke(
+        main,
+        [
+            "meetings",
+            "livestream",
+            "start",
+            "12345",
+            "--display-name",
+            "Webinar Live",
+            "--active-speaker-name",
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["action"] == "start"
+    assert captured["settings"] == {
+        "display_name": "Webinar Live",
+        "active_speaker_name": True,
+    }
+    assert "Started livestream" in result.output
+
+
+def test_meetings_livestream_start_with_no_settings_passes_none(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No settings flags → API helper receives ``settings=None`` so it
+    omits the sub-object entirely (Zoom accepts a bare action=start)."""
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_status(_client, _mid, *, action, settings):
+        captured["action"] = action
+        captured["settings"] = settings
+
+    _patch_meetings_module(monkeypatch, update_livestream_status=fake_status)
+    result = runner.invoke(main, ["meetings", "livestream", "start", "12345", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured["action"] == "start"
+    assert captured["settings"] is None
+
+
+def test_meetings_livestream_start_confirms_and_aborts(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    called = {"n": 0}
+
+    def fake_status(*_a, **_k):
+        called["n"] += 1
+
+    _patch_meetings_module(monkeypatch, update_livestream_status=fake_status)
+    result = runner.invoke(main, ["meetings", "livestream", "start", "12345"], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    assert called["n"] == 0
+
+
+def test_meetings_livestream_stop_yes_sends_action_stop(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_status(_client, meeting_id, *, action, settings=None):
+        captured["meeting_id"] = meeting_id
+        captured["action"] = action
+        captured["settings"] = settings
+
+    _patch_meetings_module(monkeypatch, update_livestream_status=fake_status)
+    result = runner.invoke(main, ["meetings", "livestream", "stop", "12345", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured["action"] == "stop"
+    # `stop` doesn't pass settings at all, so the stub default kicks in.
+    assert captured["settings"] is None
+    assert "Stopped livestream" in result.output
+
+
+def test_meetings_livestream_stop_confirms_and_aborts(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    called = {"n": 0}
+
+    def fake_status(*_a, **_k):
+        called["n"] += 1
+
+    _patch_meetings_module(monkeypatch, update_livestream_status=fake_status)
+    result = runner.invoke(main, ["meetings", "livestream", "stop", "12345"], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    assert called["n"] == 0
+
+
 # ---- #14 (write): zoom users create / delete / settings get -------------
 
 

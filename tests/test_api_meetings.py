@@ -449,3 +449,113 @@ def test_list_past_poll_results_targets_past_meetings_endpoint() -> None:
 
     fake_client.get.assert_called_once_with("/past_meetings/123/polls")
     assert "questions" in result
+
+
+# ---- livestream depth-completion (post-#13 follow-up) -------------------
+
+
+def test_get_livestream_targets_correct_path() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {
+        "stream_url": "rtmp://example.com/live",
+        "stream_key": "x",
+        "page_url": "https://example.com/watch",
+    }
+
+    result = meetings.get_livestream(fake_client, 123)
+
+    fake_client.get.assert_called_once_with("/meetings/123/livestream")
+    assert result["stream_url"] == "rtmp://example.com/live"
+
+
+def test_get_livestream_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {}
+
+    meetings.get_livestream(fake_client, "evil/../99")
+    arg = fake_client.get.call_args[0][0]
+    assert "/.." not in arg
+    assert "%2F" in arg
+
+
+def test_update_livestream_patches_with_payload() -> None:
+    fake_client = MagicMock()
+    fake_client.patch.return_value = {}
+
+    payload = {
+        "stream_url": "rtmp://example.com/live",
+        "stream_key": "k",
+        "page_url": "https://example.com/watch",
+    }
+    meetings.update_livestream(fake_client, 123, payload)
+
+    fake_client.patch.assert_called_once_with("/meetings/123/livestream", json=payload)
+
+
+def test_update_livestream_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.patch.return_value = {}
+
+    meetings.update_livestream(fake_client, "evil/../99", {})
+    arg = fake_client.patch.call_args[0][0]
+    assert "/.." not in arg
+    assert "%2F" in arg
+
+
+def test_update_livestream_status_starts_with_action_and_settings() -> None:
+    """Start variant — Zoom requires the broadcast settings sub-object."""
+    fake_client = MagicMock()
+    fake_client.patch.return_value = {}
+
+    meetings.update_livestream_status(
+        fake_client,
+        123,
+        action="start",
+        settings={"active_speaker_name": True, "display_name": "Webinar live"},
+    )
+
+    fake_client.patch.assert_called_once_with(
+        "/meetings/123/livestream/status",
+        json={
+            "action": "start",
+            "settings": {
+                "active_speaker_name": True,
+                "display_name": "Webinar live",
+            },
+        },
+    )
+
+
+def test_update_livestream_status_stops_without_settings() -> None:
+    """Stop variant — settings sub-object is omitted (Zoom doesn't need
+    it for shutdown)."""
+    fake_client = MagicMock()
+    fake_client.patch.return_value = {}
+
+    meetings.update_livestream_status(fake_client, 123, action="stop")
+
+    fake_client.patch.assert_called_once_with(
+        "/meetings/123/livestream/status", json={"action": "stop"}
+    )
+
+
+@pytest.mark.parametrize("bad_action", ["bogus", "", "pause"])
+def test_update_livestream_status_rejects_unknown_action(bad_action: str) -> None:
+    fake_client = MagicMock()
+    with pytest.raises(ValueError, match="action"):
+        meetings.update_livestream_status(fake_client, 123, action=bad_action)
+
+
+def test_update_livestream_status_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.patch.return_value = {}
+
+    meetings.update_livestream_status(fake_client, "evil/../99", action="stop")
+    arg = fake_client.patch.call_args[0][0]
+    assert "/.." not in arg
+    assert "%2F" in arg
+
+
+def test_allowed_livestream_actions_pinned() -> None:
+    assert "start" in meetings.ALLOWED_LIVESTREAM_ACTIONS
+    assert "stop" in meetings.ALLOWED_LIVESTREAM_ACTIONS
