@@ -143,10 +143,12 @@ def _emit_table(
     the *header* names. Matches the historical CLI shape.
 
     json mode: collect all rows into a list and emit as a JSON array
-    with the *API key* names (so the JSON mirrors Zoom's response
-    shape and round-trips cleanly into other API calls). Memory
-    behaviour change for paginated lists — acceptable because callers
-    asking for json are going to JSON.parse() the whole thing.
+    of the **full row dicts** (every API field Zoom returned, not just
+    the selected columns). The columns spec only governs the TSV
+    layout — JSON callers expect to receive everything and pick what
+    they need. Memory behaviour change for paginated lists is
+    acceptable because callers asking for json are going to
+    JSON.parse() the whole thing.
     """
     import json as _json
 
@@ -155,9 +157,7 @@ def _emit_table(
     ]
     fmt = _output_format(ctx)
     if fmt == "json":
-        click.echo(
-            _json.dumps([{key: r.get(key, "") for _, key in normalized} for r in rows], indent=2)
-        )
+        click.echo(_json.dumps(list(rows), indent=2))
         return
     click.echo("\t".join(h for h, _ in normalized))
     for r in rows:
@@ -3549,29 +3549,32 @@ def dashboard_meetings_cmd():
     default=300,
     show_default=True,
 )
+@click.pass_context
 @_translate_keyring_errors
-def dashboard_meetings_list(type_, from_, to, page_size):
-    """TSV: uuid\\tid\\ttopic\\thost\\tparticipants\\tduration\\tstart_time."""
+def dashboard_meetings_list(ctx, type_, from_, to, page_size):
+    """TSV by default; honors ``--output json``."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
-            click.echo("uuid\tid\ttopic\thost\tparticipants\tduration\tstart_time")
-            for m in dashboard.list_meetings(
-                client,
-                type=type_,
-                from_=from_,
-                to=to,
-                page_size=page_size,
-            ):
-                click.echo(
-                    f"{m.get('uuid', '')}\t"
-                    f"{m.get('id', '')}\t"
-                    f"{m.get('topic', '')}\t"
-                    f"{m.get('host', '')}\t"
-                    f"{m.get('participants', '')}\t"
-                    f"{m.get('duration', '')}\t"
-                    f"{m.get('start_time', '')}"
-                )
+            _emit_table(
+                ctx,
+                dashboard.list_meetings(
+                    client,
+                    type=type_,
+                    from_=from_,
+                    to=to,
+                    page_size=page_size,
+                ),
+                columns=(
+                    "uuid",
+                    "id",
+                    "topic",
+                    "host",
+                    "participants",
+                    "duration",
+                    "start_time",
+                ),
+            )
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
 
@@ -3609,24 +3612,27 @@ def dashboard_meetings_get(meeting_id):
     default=300,
     show_default=True,
 )
+@click.pass_context
 @_translate_keyring_errors
-def dashboard_meetings_participants(meeting_id, type_, page_size):
-    """TSV: id\\tuser_id\\tuser_name\\tjoin_time\\tleave_time\\tduration."""
+def dashboard_meetings_participants(ctx, meeting_id, type_, page_size):
+    """TSV by default; honors ``--output json``."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
-            click.echo("id\tuser_id\tuser_name\tjoin_time\tleave_time\tduration")
-            for p in dashboard.list_meeting_participants(
-                client, meeting_id, type=type_, page_size=page_size
-            ):
-                click.echo(
-                    f"{p.get('id', '')}\t"
-                    f"{p.get('user_id', '')}\t"
-                    f"{p.get('user_name', '')}\t"
-                    f"{p.get('join_time', '')}\t"
-                    f"{p.get('leave_time', '')}\t"
-                    f"{p.get('duration', '')}"
-                )
+            _emit_table(
+                ctx,
+                dashboard.list_meeting_participants(
+                    client, meeting_id, type=type_, page_size=page_size
+                ),
+                columns=(
+                    "id",
+                    "user_id",
+                    "user_name",
+                    "join_time",
+                    "leave_time",
+                    "duration",
+                ),
+            )
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
 
@@ -3643,21 +3649,18 @@ def dashboard_zoomrooms_cmd():
     default=300,
     show_default=True,
 )
+@click.pass_context
 @_translate_keyring_errors
-def dashboard_zoomrooms_list(page_size):
-    """TSV: id\\troom_name\\tstatus\\tdevice_ip\\tlast_start_time."""
+def dashboard_zoomrooms_list(ctx, page_size):
+    """TSV by default; honors ``--output json``."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
-            click.echo("id\troom_name\tstatus\tdevice_ip\tlast_start_time")
-            for r in dashboard.list_zoomrooms(client, page_size=page_size):
-                click.echo(
-                    f"{r.get('id', '')}\t"
-                    f"{r.get('room_name', '')}\t"
-                    f"{r.get('status', '')}\t"
-                    f"{r.get('device_ip', '')}\t"
-                    f"{r.get('last_start_time', '')}"
-                )
+            _emit_table(
+                ctx,
+                dashboard.list_zoomrooms(client, page_size=page_size),
+                columns=("id", "room_name", "status", "device_ip", "last_start_time"),
+            )
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
 
@@ -3741,30 +3744,33 @@ def reports_meetings_cmd():
     default=300,
     show_default=True,
 )
+@click.pass_context
 @_translate_keyring_errors
-def reports_meetings_list(user_id, from_, to, meeting_type, page_size):
-    """TSV: uuid\\tid\\ttopic\\tuser_email\\tstart_time\\tduration\\tparticipants_count."""
+def reports_meetings_list(ctx, user_id, from_, to, meeting_type, page_size):
+    """TSV by default; honors ``--output json``."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
-            click.echo("uuid\tid\ttopic\tuser_email\tstart_time\tduration\tparticipants_count")
-            for m in reports.list_meetings_report(
-                client,
-                user_id=user_id,
-                from_=from_,
-                to=to,
-                meeting_type=meeting_type,
-                page_size=page_size,
-            ):
-                click.echo(
-                    f"{m.get('uuid', '')}\t"
-                    f"{m.get('id', '')}\t"
-                    f"{m.get('topic', '')}\t"
-                    f"{m.get('user_email', '')}\t"
-                    f"{m.get('start_time', '')}\t"
-                    f"{m.get('duration', '')}\t"
-                    f"{m.get('participants_count', '')}"
-                )
+            _emit_table(
+                ctx,
+                reports.list_meetings_report(
+                    client,
+                    user_id=user_id,
+                    from_=from_,
+                    to=to,
+                    meeting_type=meeting_type,
+                    page_size=page_size,
+                ),
+                columns=(
+                    "uuid",
+                    "id",
+                    "topic",
+                    "user_email",
+                    "start_time",
+                    "duration",
+                    "participants_count",
+                ),
+            )
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
 
@@ -3780,22 +3786,25 @@ def reports_meetings_list(user_id, from_, to, meeting_type, page_size):
     default=300,
     show_default=True,
 )
+@click.pass_context
 @_translate_keyring_errors
-def reports_meetings_participants(meeting_id, page_size):
-    """TSV: id\\tname\\tuser_email\\tjoin_time\\tleave_time\\tduration."""
+def reports_meetings_participants(ctx, meeting_id, page_size):
+    """TSV by default; honors ``--output json``."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
-            click.echo("id\tname\tuser_email\tjoin_time\tleave_time\tduration")
-            for p in reports.list_meeting_participants(client, meeting_id, page_size=page_size):
-                click.echo(
-                    f"{p.get('id', '')}\t"
-                    f"{p.get('name', '')}\t"
-                    f"{p.get('user_email', '')}\t"
-                    f"{p.get('join_time', '')}\t"
-                    f"{p.get('leave_time', '')}\t"
-                    f"{p.get('duration', '')}"
-                )
+            _emit_table(
+                ctx,
+                reports.list_meeting_participants(client, meeting_id, page_size=page_size),
+                columns=(
+                    "id",
+                    "name",
+                    "user_email",
+                    "join_time",
+                    "leave_time",
+                    "duration",
+                ),
+            )
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
 
@@ -3818,27 +3827,30 @@ def reports_operationlogs_cmd():
     default=300,
     show_default=True,
 )
+@click.pass_context
 @_translate_keyring_errors
-def reports_operationlogs_list(from_, to, category_type, page_size):
-    """TSV: time\\toperator\\tcategory_type\\taction\\toperation_detail."""
+def reports_operationlogs_list(ctx, from_, to, category_type, page_size):
+    """TSV by default; honors ``--output json``."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
-            click.echo("time\toperator\tcategory_type\taction\toperation_detail")
-            for entry in reports.list_operation_logs(
-                client,
-                from_=from_,
-                to=to,
-                category_type=category_type,
-                page_size=page_size,
-            ):
-                click.echo(
-                    f"{entry.get('time', '')}\t"
-                    f"{entry.get('operator', '')}\t"
-                    f"{entry.get('category_type', '')}\t"
-                    f"{entry.get('action', '')}\t"
-                    f"{entry.get('operation_detail', '')}"
-                )
+            _emit_table(
+                ctx,
+                reports.list_operation_logs(
+                    client,
+                    from_=from_,
+                    to=to,
+                    category_type=category_type,
+                    page_size=page_size,
+                ),
+                columns=(
+                    "time",
+                    "operator",
+                    "category_type",
+                    "action",
+                    "operation_detail",
+                ),
+            )
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
 
@@ -3873,15 +3885,18 @@ def chat_channels_cmd():
     show_default=True,
     help="Items per page (Zoom caps /chat/users/<id>/channels at 50).",
 )
+@click.pass_context
 @_translate_keyring_errors
-def chat_channels_list(user_id, page_size):
-    """TSV: id\\tname\\ttype\\tchannel_settings.posting_permissions."""
+def chat_channels_list(ctx, user_id, page_size):
+    """TSV (id\\tname\\ttype) by default; honors ``--output json``."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
-            click.echo("id\tname\ttype")
-            for ch in chat.list_channels(client, user_id=user_id, page_size=page_size):
-                click.echo(f"{ch.get('id', '')}\t{ch.get('name', '')}\t{ch.get('type', '')}")
+            _emit_table(
+                ctx,
+                chat.list_channels(client, user_id=user_id, page_size=page_size),
+                columns=("id", "name", "type"),
+            )
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
 
@@ -3960,37 +3975,41 @@ def phone_users_cmd():
     default=300,
     show_default=True,
 )
+@click.pass_context
 @_translate_keyring_errors
-def phone_users_list(page_size):
-    """TSV: id\\temail\\textension_number\\tstatus."""
+def phone_users_list(ctx, page_size):
+    """TSV (id\\temail\\textension_number\\tstatus) by default; honors
+    the global ``--output json`` flag for parseable output."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
-            click.echo("id\temail\textension_number\tstatus")
-            for u in phone.list_phone_users(client, page_size=page_size):
-                click.echo(
-                    f"{u.get('id', '')}\t"
-                    f"{u.get('email', '')}\t"
-                    f"{u.get('extension_number', '')}\t"
-                    f"{u.get('status', '')}"
-                )
+            _emit_table(
+                ctx,
+                phone.list_phone_users(client, page_size=page_size),
+                columns=("id", "email", "extension_number", "status"),
+            )
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
 
 
-@phone_users_cmd.command("get", help="Print a phone user's profile (JSON).")
+@phone_users_cmd.command("get", help="Print a phone user's profile.")
 @click.argument("user_id")
+@click.pass_context
 @_translate_keyring_errors
-def phone_users_get(user_id):
-    import json as _json
-
+def phone_users_get(ctx, user_id):
+    """Honors the global ``--output`` flag — text mode prints the
+    well-known fields one-per-line; JSON emits the full envelope."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
             profile = phone.get_phone_user(client, user_id)
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
-    click.echo(_json.dumps(profile, indent=2, sort_keys=True))
+    _emit_object(
+        ctx,
+        profile,
+        fields=("id", "email", "extension_number", "status", "site_id"),
+    )
 
 
 @phone_cmd.group("call-logs", help="Zoom Phone call logs.")
@@ -4012,28 +4031,31 @@ def phone_call_logs_cmd():
     default=300,
     show_default=True,
 )
+@click.pass_context
 @_translate_keyring_errors
-def phone_call_logs_list(user_id, from_, to, page_size):
-    """TSV: id\\tdirection\\tcaller_number\\tcallee_number\\tstart_time\\tduration."""
+def phone_call_logs_list(ctx, user_id, from_, to, page_size):
+    """TSV by default; honors the global ``--output json`` flag."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
-            click.echo("id\tdirection\tcaller_number\tcallee_number\tstart_time\tduration")
-            for entry in phone.list_call_logs(
-                client,
-                user_id=user_id,
-                from_=from_,
-                to=to,
-                page_size=page_size,
-            ):
-                click.echo(
-                    f"{entry.get('id', '')}\t"
-                    f"{entry.get('direction', '')}\t"
-                    f"{entry.get('caller_number', '')}\t"
-                    f"{entry.get('callee_number', '')}\t"
-                    f"{entry.get('start_time', '')}\t"
-                    f"{entry.get('duration', '')}"
-                )
+            _emit_table(
+                ctx,
+                phone.list_call_logs(
+                    client,
+                    user_id=user_id,
+                    from_=from_,
+                    to=to,
+                    page_size=page_size,
+                ),
+                columns=(
+                    "id",
+                    "direction",
+                    "caller_number",
+                    "callee_number",
+                    "start_time",
+                    "duration",
+                ),
+            )
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
 
@@ -4050,20 +4072,28 @@ def phone_queues_cmd():
     default=300,
     show_default=True,
 )
+@click.pass_context
 @_translate_keyring_errors
-def phone_queues_list(page_size):
-    """TSV: id\\tname\\textension_number\\tsite_name."""
+def phone_queues_list(ctx, page_size):
+    """TSV by default; honors the global ``--output json`` flag.
+
+    Note: text mode flattens the nested ``site.name`` to ``site_name``;
+    JSON mode preserves the nested ``site`` object verbatim.
+    """
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
-            click.echo("id\tname\textension_number\tsite_name")
-            for q in phone.list_call_queues(client, page_size=page_size):
-                click.echo(
-                    f"{q.get('id', '')}\t"
-                    f"{q.get('name', '')}\t"
-                    f"{q.get('extension_number', '')}\t"
-                    f"{q.get('site', {}).get('name', '')}"
-                )
+            # Flatten site.name → site_name so it has a column home;
+            # JSON mode also keeps the original nested `site` dict.
+            def _augmented():
+                for q in phone.list_call_queues(client, page_size=page_size):
+                    yield {**q, "site_name": q.get("site", {}).get("name", "")}
+
+            _emit_table(
+                ctx,
+                _augmented(),
+                columns=("id", "name", "extension_number", "site_name"),
+            )
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
 
@@ -4130,27 +4160,30 @@ def phone_recordings_download(recording_id, out_dir):
     default=300,
     show_default=True,
 )
+@click.pass_context
 @_translate_keyring_errors
-def phone_recordings_list(user_id, from_, to, page_size):
-    """TSV: id\\tcaller_number\\tcallee_number\\tdate_time\\tduration."""
+def phone_recordings_list(ctx, user_id, from_, to, page_size):
+    """TSV by default; honors the global ``--output json`` flag."""
     creds = _load_creds_or_exit()
     try:
         with _build_api_client(creds) as client:
-            click.echo("id\tcaller_number\tcallee_number\tdate_time\tduration")
-            for r in phone.list_phone_recordings(
-                client,
-                user_id=user_id,
-                from_=from_,
-                to=to,
-                page_size=page_size,
-            ):
-                click.echo(
-                    f"{r.get('id', '')}\t"
-                    f"{r.get('caller_number', '')}\t"
-                    f"{r.get('callee_number', '')}\t"
-                    f"{r.get('date_time', '')}\t"
-                    f"{r.get('duration', '')}"
-                )
+            _emit_table(
+                ctx,
+                phone.list_phone_recordings(
+                    client,
+                    user_id=user_id,
+                    from_=from_,
+                    to=to,
+                    page_size=page_size,
+                ),
+                columns=(
+                    "id",
+                    "caller_number",
+                    "callee_number",
+                    "date_time",
+                    "duration",
+                ),
+            )
     except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
         _exit_on_api_error(exc)
 
