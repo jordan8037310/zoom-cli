@@ -137,3 +137,163 @@ def delete_recording_file(
         f"{quote(str(recording_id), safe='')}",
         params={"action": action},
     )
+
+
+# ---- depth-completion: recover + settings + registrants ----------------
+
+#: Allowed values for ``list_recording_registrants(status=...)``.
+#: Same shape as meeting registrants — pending is the default (the bucket
+#: admins approve from).
+ALLOWED_REGISTRANT_STATUSES: tuple[str, ...] = ("pending", "approved", "denied")
+
+#: Allowed values for ``update_recording_registrant_status(action=...)``.
+#: Note: recording registrants do NOT support ``cancel`` (unlike meeting
+#: registrants — Zoom's recording-share approval flow is just yes/no).
+ALLOWED_REGISTRANT_ACTIONS: tuple[str, ...] = ("approve", "deny")
+
+
+def recover_recordings(client: ApiClient, meeting_id: str | int) -> dict[str, Any]:
+    """``PUT /meetings/{meeting_id}/recordings/status`` with
+    ``action=recover`` — restore all of a meeting's trashed recordings.
+
+    Counterpart to :func:`delete_recordings` with ``action="trash"``
+    (Zoom keeps trashed recordings recoverable for 30 days).
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``recording:write:recording``.
+    """
+    return client.put(
+        f"/meetings/{quote(str(meeting_id), safe='')}/recordings/status",
+        json={"action": "recover"},
+    )
+
+
+def recover_recording_file(
+    client: ApiClient,
+    meeting_id: str | int,
+    recording_id: str,
+) -> dict[str, Any]:
+    """``PUT /meetings/{meeting_id}/recordings/{recording_id}/status``
+    with ``action=recover`` — restore one trashed recording file.
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``recording:write:recording``.
+    """
+    return client.put(
+        f"/meetings/{quote(str(meeting_id), safe='')}/recordings/"
+        f"{quote(str(recording_id), safe='')}/status",
+        json={"action": "recover"},
+    )
+
+
+def get_recording_settings(client: ApiClient, meeting_id: str | int) -> dict[str, Any]:
+    """``GET /meetings/{meeting_id}/recordings/settings`` — fetch
+    recording sharing/permission settings.
+
+    Returns the settings envelope (share_recording, viewer_download,
+    on_demand, password, recording_authentication, etc.).
+
+    Required scopes: ``recording:read:recording``.
+    """
+    return client.get(f"/meetings/{quote(str(meeting_id), safe='')}/recordings/settings")
+
+
+def update_recording_settings(
+    client: ApiClient, meeting_id: str | int, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """``PATCH /meetings/{meeting_id}/recordings/settings`` — partial
+    update to recording sharing/permission settings.
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``recording:write:recording``.
+    """
+    return client.patch(
+        f"/meetings/{quote(str(meeting_id), safe='')}/recordings/settings",
+        json=payload,
+    )
+
+
+def list_recording_registrants(
+    client: ApiClient,
+    meeting_id: str | int,
+    *,
+    status: str = "pending",
+    page_size: int = DEFAULT_PAGE_SIZE,
+) -> Iterator[dict[str, Any]]:
+    """``GET /meetings/{meeting_id}/recordings/registrants`` — yield
+    registrants who requested access to the on-demand recording.
+
+    Args:
+        client: Authenticated :class:`ApiClient`.
+        meeting_id: Numeric Zoom meeting ID.
+        status: One of :data:`ALLOWED_REGISTRANT_STATUSES`. Default
+            ``"pending"``.
+        page_size: Items per page.
+
+    Required scopes: ``recording:read:recording``.
+    """
+    if status not in ALLOWED_REGISTRANT_STATUSES:
+        raise ValueError(f"status must be one of {ALLOWED_REGISTRANT_STATUSES!r}, got {status!r}")
+    return paginate(
+        client,
+        f"/meetings/{quote(str(meeting_id), safe='')}/recordings/registrants",
+        item_key="registrants",
+        params={"status": status},
+        page_size=page_size,
+    )
+
+
+def add_recording_registrant(
+    client: ApiClient,
+    meeting_id: str | int,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """``POST /meetings/{meeting_id}/recordings/registrants`` — register
+    a viewer for the on-demand recording.
+
+    Returns Zoom's response with the registrant id and ``share_url`` —
+    the actionable thing to send to the viewer.
+
+    Required scopes: ``recording:write:recording``.
+    """
+    return client.post(
+        f"/meetings/{quote(str(meeting_id), safe='')}/recordings/registrants",
+        json=payload,
+    )
+
+
+def update_recording_registrant_status(
+    client: ApiClient,
+    meeting_id: str | int,
+    *,
+    action: str,
+    registrant_ids: list[str],
+) -> dict[str, Any]:
+    """``PUT /meetings/{meeting_id}/recordings/registrants/status`` —
+    bulk-update registrant approval status.
+
+    Args:
+        client: Authenticated :class:`ApiClient`.
+        meeting_id: Numeric Zoom meeting ID.
+        action: One of :data:`ALLOWED_REGISTRANT_ACTIONS`. Recording
+            registrants only support approve/deny — no cancel verb.
+        registrant_ids: Zoom registrant IDs (must be non-empty).
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``recording:write:recording``.
+    """
+    if action not in ALLOWED_REGISTRANT_ACTIONS:
+        raise ValueError(f"action must be one of {ALLOWED_REGISTRANT_ACTIONS!r}, got {action!r}")
+    if not registrant_ids:
+        raise ValueError("registrant_ids must contain at least one ID")
+    return client.put(
+        f"/meetings/{quote(str(meeting_id), safe='')}/recordings/registrants/status",
+        json={
+            "action": action,
+            "registrants": [{"id": rid} for rid in registrant_ids],
+        },
+    )
