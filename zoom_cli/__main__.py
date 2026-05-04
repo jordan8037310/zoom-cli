@@ -935,6 +935,168 @@ def users_settings_update(user_id, from_json, yes, dry_run):
     click.echo(f"Updated settings for user {user_id}.")
 
 
+# ---- Users depth-completion: status + password + email + token + perms --
+
+
+def _user_status_action(action: str, action_past: str):
+    """Build one of the ``activate`` / ``deactivate`` subcommands.
+
+    Same factory pattern as the registrant status verbs — extract the
+    shared confirmation + dispatch shape so the per-verb body is empty."""
+
+    @users_cmd.command(
+        action,
+        help=f"{action.capitalize()} a user (PUT /users/<user-id>/status, action={action}).",
+    )
+    @click.argument("user_id")
+    @click.option(
+        "--yes",
+        "-y",
+        is_flag=True,
+        default=False,
+        help="Skip the confirmation prompt.",
+    )
+    @_translate_keyring_errors
+    def _cmd(user_id, yes):
+        if not yes and not click.confirm(f"{action.capitalize()} user {user_id}?", default=False):
+            click.echo("Aborted.")
+            return
+        creds = _load_creds_or_exit()
+        try:
+            with _build_api_client(creds) as client:
+                users.update_user_status(client, user_id, action=action)
+        except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+            _exit_on_api_error(exc)
+        click.echo(f"{action_past} user {user_id}.")
+
+    _cmd.__name__ = f"users_{action}"
+    return _cmd
+
+
+_users_activate = _user_status_action("activate", "Activated")
+_users_deactivate = _user_status_action("deactivate", "Deactivated")
+
+
+@users_cmd.command(
+    "password",
+    help="Reset a user's password (PUT /users/<user-id>/password). Prompts via getpass — never accepted as a flag.",
+)
+@click.argument("user_id")
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@_translate_keyring_errors
+def users_password(user_id, yes):
+    """Password is read from a masked prompt (getpass) — never via argv,
+    never via env var. Confirms the change before sending."""
+    import getpass
+
+    new_password = getpass.getpass(f"New password for {user_id}: ")
+    if not new_password:
+        click.echo("Empty password — aborted.", err=True)
+        raise click.exceptions.Exit(code=1)
+    confirm_password = getpass.getpass("Confirm new password: ")
+    if confirm_password != new_password:
+        click.echo("Passwords do not match — aborted.", err=True)
+        raise click.exceptions.Exit(code=1)
+
+    if not yes and not click.confirm(f"Reset password for user {user_id}?", default=False):
+        click.echo("Aborted.")
+        return
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            users.update_user_password(client, user_id, new_password=new_password)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Reset password for user {user_id}.")
+
+
+@users_cmd.command(
+    "email",
+    help="Change a user's email (PUT /users/<user-id>/email; sends Zoom confirmation link).",
+)
+@click.argument("user_id")
+@click.argument("new_email")
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@_translate_keyring_errors
+def users_email(user_id, new_email, yes):
+    """Zoom sends the new address a confirmation link — the change isn't
+    active until the user clicks. Confirms by default since it triggers
+    user-visible email."""
+    if not yes and not click.confirm(
+        f"Change email for user {user_id} to {new_email}? "
+        f"(Zoom will send a confirmation link to {new_email})",
+        default=False,
+    ):
+        click.echo("Aborted.")
+        return
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            users.update_user_email(client, user_id, new_email=new_email)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Email change initiated for user {user_id} -> {new_email}.")
+
+
+@users_cmd.command(
+    "token",
+    help="Get a user-level token (GET /users/<user-id>/token; sensitive).",
+)
+@click.argument("user_id")
+@click.option(
+    "--type",
+    "token_type",
+    type=click.Choice(list(users.ALLOWED_USER_TOKEN_TYPES)),
+    default="zak",
+    show_default=True,
+    help="Token type. Default zak (start-meeting on the user's behalf).",
+)
+@_translate_keyring_errors
+def users_token(user_id, token_type):
+    """Output is the raw token string. Sensitive — anyone with a zak can
+    start the user's meetings as them. Don't paste into chat / tickets."""
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            data = users.get_user_token(client, user_id, token_type=token_type)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(data.get("token", ""))
+
+
+@users_cmd.command(
+    "permissions",
+    help="List a user's role + assigned permissions (GET /users/<user-id>/permissions).",
+)
+@click.argument("user_id")
+@_translate_keyring_errors
+def users_permissions(user_id):
+    """One permission per line. The set is what the user can DO — useful
+    for "why can't this person create a meeting on behalf of X?" audits."""
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            data = users.get_user_permissions(client, user_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    for perm in data.get("permissions", []):
+        click.echo(perm)
+
+
 # ---- Zoom Meetings — write commands -------------------------------------
 #
 # Closes #13 (write piece). Confirmation-flow design mirrors `zoom rm`:

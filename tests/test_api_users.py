@@ -277,3 +277,143 @@ def test_update_user_settings_passes_payload_through() -> None:
     users.update_user_settings(fake_client, "me", payload)
 
     assert fake_client.patch.call_args[1]["json"] == payload
+
+
+# ---- depth-completion: status + password + email + token + permissions --
+
+
+def test_update_user_status_activate_puts_action() -> None:
+    fake_client = MagicMock()
+    fake_client.put.return_value = {}
+
+    users.update_user_status(fake_client, "u-1", action="activate")
+
+    fake_client.put.assert_called_once_with("/users/u-1/status", json={"action": "activate"})
+
+
+def test_update_user_status_deactivate_puts_action() -> None:
+    fake_client = MagicMock()
+    fake_client.put.return_value = {}
+
+    users.update_user_status(fake_client, "u-1", action="deactivate")
+
+    fake_client.put.assert_called_once_with("/users/u-1/status", json={"action": "deactivate"})
+
+
+@pytest.mark.parametrize("bad_action", ["bogus", "", "delete", "ACTIVATE"])
+def test_update_user_status_rejects_unknown_action(bad_action: str) -> None:
+    fake_client = MagicMock()
+    with pytest.raises(ValueError, match="action"):
+        users.update_user_status(fake_client, "u-1", action=bad_action)
+
+
+def test_update_user_status_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.put.return_value = {}
+    users.update_user_status(fake_client, "evil/../1", action="activate")
+    arg = fake_client.put.call_args[0][0]
+    assert "/.." not in arg
+    assert "%2F" in arg
+
+
+def test_allowed_status_actions_pinned() -> None:
+    assert "activate" in users.ALLOWED_STATUS_ACTIONS
+    assert "deactivate" in users.ALLOWED_STATUS_ACTIONS
+
+
+def test_update_user_password_puts_password_field() -> None:
+    """Password reset — Zoom expects ``{password: "..."}``. The helper
+    accepts it in cleartext (the CLI prompts via getpass; the secret
+    never reaches argv)."""
+    fake_client = MagicMock()
+    fake_client.put.return_value = {}
+
+    users.update_user_password(fake_client, "u-1", new_password="hunter2hunter2")
+
+    fake_client.put.assert_called_once_with(
+        "/users/u-1/password", json={"password": "hunter2hunter2"}
+    )
+
+
+def test_update_user_password_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.put.return_value = {}
+    users.update_user_password(fake_client, "evil/../1", new_password="x12345678")
+    arg = fake_client.put.call_args[0][0]
+    assert "/.." not in arg
+    assert "%2F" in arg
+
+
+def test_update_user_email_puts_email_field() -> None:
+    """Email change triggers a Zoom confirmation flow — the new address
+    isn't active until the user clicks the confirmation link."""
+    fake_client = MagicMock()
+    fake_client.put.return_value = {}
+
+    users.update_user_email(fake_client, "u-1", new_email="new@example.com")
+
+    fake_client.put.assert_called_once_with("/users/u-1/email", json={"email": "new@example.com"})
+
+
+def test_update_user_email_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.put.return_value = {}
+    users.update_user_email(fake_client, "evil/../1", new_email="x@e.com")
+    arg = fake_client.put.call_args[0][0]
+    assert "/.." not in arg
+    assert "%2F" in arg
+
+
+def test_get_user_token_default_zak() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {"token": "abc.def.ghi"}
+
+    result = users.get_user_token(fake_client, "u-1")
+
+    fake_client.get.assert_called_once_with("/users/u-1/token", params={"type": "zak"})
+    assert result["token"] == "abc.def.ghi"
+
+
+def test_get_user_token_forwards_type() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {"token": "x"}
+
+    users.get_user_token(fake_client, "u-1", token_type="token")
+
+    fake_client.get.assert_called_once_with("/users/u-1/token", params={"type": "token"})
+
+
+@pytest.mark.parametrize("bad_type", ["bogus", "", "ZAK", "z a k"])
+def test_get_user_token_rejects_unknown_type(bad_type: str) -> None:
+    fake_client = MagicMock()
+    with pytest.raises(ValueError, match="token_type"):
+        users.get_user_token(fake_client, "u-1", token_type=bad_type)
+
+
+def test_allowed_user_token_types_pinned() -> None:
+    """Pinned set — Zoom currently supports zak / token / zpk for
+    user-level token requests."""
+    assert "zak" in users.ALLOWED_USER_TOKEN_TYPES
+    assert "token" in users.ALLOWED_USER_TOKEN_TYPES
+    assert "zpk" in users.ALLOWED_USER_TOKEN_TYPES
+
+
+def test_get_user_permissions_targets_correct_path() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {
+        "permissions": ["AccountSettingPermission", "MeetingPermission"]
+    }
+
+    result = users.get_user_permissions(fake_client, "u-1")
+
+    fake_client.get.assert_called_once_with("/users/u-1/permissions")
+    assert "MeetingPermission" in result["permissions"]
+
+
+def test_get_user_permissions_url_encodes_id() -> None:
+    fake_client = MagicMock()
+    fake_client.get.return_value = {}
+    users.get_user_permissions(fake_client, "evil/../1")
+    arg = fake_client.get.call_args[0][0]
+    assert "/.." not in arg
+    assert "%2F" in arg

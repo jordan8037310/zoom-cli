@@ -4183,3 +4183,197 @@ def test_users_settings_update_default_user_me(
     )
     assert result.exit_code == 0, result.output
     assert captured["user_id"] == "me"
+
+
+# ---- users depth-completion: status / password / email / token / perms --
+
+
+@pytest.mark.parametrize(
+    "subcmd,expected_action,past",
+    [
+        ("activate", "activate", "Activated"),
+        ("deactivate", "deactivate", "Deactivated"),
+    ],
+)
+def test_users_status_actions_send_correct_action(
+    runner: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    subcmd: str,
+    expected_action: str,
+    past: str,
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_status(_client, user_id, *, action):
+        captured["user_id"] = user_id
+        captured["action"] = action
+
+    _patch_users_module(monkeypatch, update_user_status=fake_status)
+    result = runner.invoke(main, ["users", subcmd, "u-1", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured["user_id"] == "u-1"
+    assert captured["action"] == expected_action
+    assert past in result.output
+
+
+def test_users_activate_confirms_and_aborts(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    called = {"n": 0}
+
+    def fake_status(*_a, **_k):
+        called["n"] += 1
+
+    _patch_users_module(monkeypatch, update_user_status=fake_status)
+    result = runner.invoke(main, ["users", "activate", "u-1"], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    assert called["n"] == 0
+
+
+def test_users_password_prompts_via_getpass(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Password is read via getpass.getpass — never via argv. We patch
+    getpass to return a known value and confirm the helper sees it."""
+    import getpass
+
+    _save_creds()
+    captured: dict[str, object] = {}
+    pw_responses = iter(["hunter2hunter2", "hunter2hunter2"])
+
+    def fake_getpass(_prompt):
+        return next(pw_responses)
+
+    monkeypatch.setattr(getpass, "getpass", fake_getpass)
+
+    def fake_password(_client, user_id, *, new_password):
+        captured["user_id"] = user_id
+        captured["new_password"] = new_password
+
+    _patch_users_module(monkeypatch, update_user_password=fake_password)
+    result = runner.invoke(main, ["users", "password", "u-1", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured["user_id"] == "u-1"
+    assert captured["new_password"] == "hunter2hunter2"
+    assert "Reset password for user u-1" in result.output
+
+
+def test_users_password_rejects_mismatched_confirmation(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the confirm-prompt doesn't match the first prompt, abort
+    without calling the API."""
+    import getpass
+
+    _save_creds()
+    pw_responses = iter(["one", "two"])
+    monkeypatch.setattr(getpass, "getpass", lambda _p: next(pw_responses))
+
+    called = {"n": 0}
+    _patch_users_module(
+        monkeypatch,
+        update_user_password=lambda *_a, **_k: called.__setitem__("n", called["n"] + 1),
+    )
+    result = runner.invoke(main, ["users", "password", "u-1", "--yes"])
+    assert result.exit_code == 1
+    assert "do not match" in result.output
+    assert called["n"] == 0
+
+
+def test_users_password_rejects_empty(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    import getpass
+
+    _save_creds()
+    monkeypatch.setattr(getpass, "getpass", lambda _p: "")
+    called = {"n": 0}
+    _patch_users_module(
+        monkeypatch,
+        update_user_password=lambda *_a, **_k: called.__setitem__("n", called["n"] + 1),
+    )
+    result = runner.invoke(main, ["users", "password", "u-1", "--yes"])
+    assert result.exit_code == 1
+    assert "Empty password" in result.output
+    assert called["n"] == 0
+
+
+def test_users_email_yes_calls_api(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_email(_client, user_id, *, new_email):
+        captured["user_id"] = user_id
+        captured["new_email"] = new_email
+
+    _patch_users_module(monkeypatch, update_user_email=fake_email)
+    result = runner.invoke(main, ["users", "email", "u-1", "new@example.com", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured["user_id"] == "u-1"
+    assert captured["new_email"] == "new@example.com"
+    assert "Email change initiated" in result.output
+
+
+def test_users_email_confirms_and_surfaces_target_address(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Confirmation message must surface the target email so the user
+    sees what's about to be changed."""
+    _save_creds()
+    called = {"n": 0}
+    _patch_users_module(
+        monkeypatch,
+        update_user_email=lambda *_a, **_k: called.__setitem__("n", called["n"] + 1),
+    )
+    result = runner.invoke(main, ["users", "email", "u-1", "new@example.com"], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "new@example.com" in result.output
+    assert "Aborted" in result.output
+    assert called["n"] == 0
+
+
+def test_users_token_default_zak(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_token(_client, user_id, *, token_type):
+        captured["user_id"] = user_id
+        captured["token_type"] = token_type
+        return {"token": "abc.def.ghi"}
+
+    _patch_users_module(monkeypatch, get_user_token=fake_token)
+    result = runner.invoke(main, ["users", "token", "u-1"])
+    assert result.exit_code == 0, result.output
+    assert captured["token_type"] == "zak"
+    assert "abc.def.ghi" in result.output
+
+
+def test_users_token_forwards_type(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_token(_client, _uid, *, token_type):
+        captured["type"] = token_type
+        return {"token": "x"}
+
+    _patch_users_module(monkeypatch, get_user_token=fake_token)
+    result = runner.invoke(main, ["users", "token", "u-1", "--type", "token"])
+    assert result.exit_code == 0, result.output
+    assert captured["type"] == "token"
+
+
+def test_users_permissions_prints_one_per_line(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_perm(_client, user_id):
+        assert user_id == "u-1"
+        return {"permissions": ["AccountSettingPermission", "MeetingPermission"]}
+
+    _patch_users_module(monkeypatch, get_user_permissions=fake_perm)
+    result = runner.invoke(main, ["users", "permissions", "u-1"])
+    assert result.exit_code == 0, result.output
+    assert "AccountSettingPermission" in result.output
+    assert "MeetingPermission" in result.output
