@@ -1097,6 +1097,244 @@ def users_permissions(user_id):
         click.echo(perm)
 
 
+# ---- Users depth-completion: schedulers + assistants + presence --------
+
+
+@users_cmd.group(
+    "schedulers",
+    help="Manage users authorized to schedule meetings on this user's behalf.",
+)
+def users_schedulers_cmd():
+    """Group for ``zoom users schedulers ...``."""
+
+
+@users_schedulers_cmd.command(
+    "list", help="List schedulers for a user (GET /users/<user-id>/schedulers)."
+)
+@click.argument("user_id")
+@_translate_keyring_errors
+def users_schedulers_list(user_id):
+    """TSV output (id\\temail)."""
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            data = users.list_schedulers(client, user_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo("id\temail")
+    for s in data.get("schedulers", []):
+        click.echo(f"{s.get('id', '')}\t{s.get('email', '')}")
+
+
+@users_schedulers_cmd.command(
+    "delete",
+    help=(
+        "Revoke a scheduler (DELETE /users/<user-id>/schedulers/<scheduler-id>); "
+        "omit the scheduler id with --all to revoke all schedulers."
+    ),
+)
+@click.argument("user_id")
+@click.argument("scheduler_id", required=False)
+@click.option(
+    "--all",
+    "all_schedulers",
+    is_flag=True,
+    default=False,
+    help="Revoke ALL schedulers (DELETE /users/<user-id>/schedulers).",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@_translate_keyring_errors
+def users_schedulers_delete(user_id, scheduler_id, all_schedulers, yes):
+    if all_schedulers and scheduler_id:
+        click.echo("--all is mutually exclusive with a scheduler-id argument.", err=True)
+        raise click.exceptions.Exit(code=1)
+    if not all_schedulers and not scheduler_id:
+        click.echo(
+            "Pass either a scheduler-id or --all to delete all schedulers.",
+            err=True,
+        )
+        raise click.exceptions.Exit(code=1)
+
+    if all_schedulers:
+        prompt = f"Revoke ALL schedulers for user {user_id}?"
+    else:
+        prompt = f"Revoke scheduler {scheduler_id} for user {user_id}?"
+    if not yes and not click.confirm(prompt, default=False):
+        click.echo("Aborted.")
+        return
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            if all_schedulers:
+                users.delete_all_schedulers(client, user_id)
+                click.echo(f"Revoked all schedulers for user {user_id}.")
+            else:
+                users.delete_scheduler(client, user_id, scheduler_id)
+                click.echo(f"Revoked scheduler {scheduler_id} for user {user_id}.")
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+
+
+@users_cmd.group(
+    "assistants",
+    help="Manage assistants who can manage meetings on this user's behalf.",
+)
+def users_assistants_cmd():
+    """Group for ``zoom users assistants ...``."""
+
+
+@users_assistants_cmd.command(
+    "add",
+    help="Assign assistants (POST /users/<user-id>/assistants).",
+)
+@click.argument("user_id")
+@click.option(
+    "--email",
+    multiple=True,
+    help="Assistant email. Repeat for multiple.",
+)
+@click.option(
+    "--from-json",
+    "from_json",
+    type=click.File("r", encoding="utf-8"),
+    default=None,
+    help="Read the full assistants payload from a JSON file (or '-' for stdin).",
+)
+@_translate_keyring_errors
+def users_assistants_add(user_id, email, from_json):
+    """Two payload-construction modes:
+    1. ``--email a@e.com --email b@e.com`` builds the assistants array from emails.
+    2. ``--from-json FILE`` accepts the full body (also lets you pass IDs).
+    Mutually exclusive."""
+    if from_json is not None:
+        if email:
+            click.echo("--from-json is mutually exclusive with --email.", err=True)
+            raise click.exceptions.Exit(code=1)
+        payload = _load_json_payload_or_exit(from_json, label="--from-json input")
+    else:
+        if not email:
+            click.echo(
+                "Pass at least one --email, or --from-json with a full body.",
+                err=True,
+            )
+            raise click.exceptions.Exit(code=1)
+        payload = {"assistants": [{"email": e} for e in email]}
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            result = users.add_assistants(client, user_id, payload)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Added assistants. ids: {result.get('ids', '')}")
+
+
+@users_assistants_cmd.command(
+    "delete",
+    help=(
+        "Revoke an assistant (DELETE /users/<user-id>/assistants/<assistant-id>); "
+        "use --all to revoke all assistants."
+    ),
+)
+@click.argument("user_id")
+@click.argument("assistant_id", required=False)
+@click.option(
+    "--all",
+    "all_assistants",
+    is_flag=True,
+    default=False,
+    help="Revoke ALL assistants (DELETE /users/<user-id>/assistants).",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@_translate_keyring_errors
+def users_assistants_delete(user_id, assistant_id, all_assistants, yes):
+    if all_assistants and assistant_id:
+        click.echo("--all is mutually exclusive with an assistant-id argument.", err=True)
+        raise click.exceptions.Exit(code=1)
+    if not all_assistants and not assistant_id:
+        click.echo(
+            "Pass either an assistant-id or --all to delete all assistants.",
+            err=True,
+        )
+        raise click.exceptions.Exit(code=1)
+
+    if all_assistants:
+        prompt = f"Revoke ALL assistants for user {user_id}?"
+    else:
+        prompt = f"Revoke assistant {assistant_id} for user {user_id}?"
+    if not yes and not click.confirm(prompt, default=False):
+        click.echo("Aborted.")
+        return
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            if all_assistants:
+                users.delete_all_assistants(client, user_id)
+                click.echo(f"Revoked all assistants for user {user_id}.")
+            else:
+                users.delete_assistant(client, user_id, assistant_id)
+                click.echo(f"Revoked assistant {assistant_id} for user {user_id}.")
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+
+
+@users_cmd.group(
+    "presence",
+    help="Read or set the user's chat presence status.",
+)
+def users_presence_cmd():
+    """Group for ``zoom users presence ...``."""
+
+
+@users_presence_cmd.command(
+    "get", help="Print the user's current presence (GET /users/<user-id>/presence_status)."
+)
+@click.argument("user_id")
+@_translate_keyring_errors
+def users_presence_get(user_id):
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            data = users.get_presence(client, user_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(data.get("status", ""))
+
+
+@users_presence_cmd.command(
+    "set",
+    help="Set the user's presence (PUT /users/<user-id>/presence_status).",
+)
+@click.argument("user_id")
+@click.argument("status", type=click.Choice(list(users.ALLOWED_PRESENCE_STATUSES)))
+@_translate_keyring_errors
+def users_presence_set(user_id, status):
+    """Status is case-sensitive — Zoom uses Available / Away /
+    Do_Not_Disturb / In_Calendar_Event / Presenting / In_A_Zoom_Meeting /
+    On_A_Call."""
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            users.set_presence(client, user_id, status=status)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Set presence for user {user_id} -> {status}.")
+
+
 # ---- Zoom Meetings — write commands -------------------------------------
 #
 # Closes #13 (write piece). Confirmation-flow design mirrors `zoom rm`:
