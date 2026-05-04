@@ -33,6 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Users settings update (PR #69): closes the deferred settings-update piece from #14. New `zoom users settings update [user-id] --from-json FILE` rounds out the get → edit → PATCH workflow.
 > Codegen `--from-url` (this branch): scripts/codegen.py can now fetch the OpenAPI spec directly instead of requiring a separate `curl` step.
 > Meetings create/update `--from-json` (this branch): `zoom meetings create` and `zoom meetings update` now accept a `--from-json FILE` (or `-` for stdin) payload-construction mode. Mutually exclusive with the per-field flags. Use this for `recurrence` and `settings` sub-objects that the field flags don't expose.
+> Meeting registrants surface (this branch): full registrant management — list / add / approve / deny / cancel / questions get / questions update — under `zoom meetings registrants`. First entry in the depth-first push to bring Meetings from ~15% → ~80% of Zoom's documented surface.
+
+### Added (post-#13 depth-completion: registrants)
+- `zoom meetings registrants list <meeting-id> [--status pending|approved|denied]` — paginated TSV output (id / email / first_name / last_name / status). Default status `pending` mirrors Zoom's own default (the approval queue admins care about).
+- `zoom meetings registrants add <meeting-id> --email E --first-name F [--last-name L]` — register an attendee. `--from-json FILE` accepts the full Zoom registration body (custom_questions, address, industry, …); mutually exclusive with the per-field flags.
+- `zoom meetings registrants approve|deny|cancel <meeting-id> --registrant ID [--registrant ID ...]` — bulk status change. `--yes` skips the confirmation prompt; otherwise the CLI confirms before mutating.
+- `zoom meetings registrants questions get <meeting-id>` — print the registration form's questions as JSON (round-trips cleanly into `questions update`).
+- `zoom meetings registrants questions update <meeting-id> --from-json FILE` — replace the registration questions array. Confirms by default; `--yes` to skip.
+- New API helpers: `meetings.list_registrants` (paginated), `meetings.add_registrant`, `meetings.update_registrant_status`, `meetings.get_registration_questions`, `meetings.update_registration_questions`. Pinned-tuple constants `ALLOWED_REGISTRANT_STATUSES` and `ALLOWED_REGISTRANT_ACTIONS` mirror the CLI choices.
 
 ### Added (post-#13 follow-up)
 - `zoom meetings create --from-json FILE` — bypass the per-field flags and POST a full Zoom create-meeting body (settings + recurrence). Validates the file contains a JSON object; rejects scalar / array payloads. Mutually exclusive with `--topic / --type / --start-time / --duration / --timezone / --password / --agenda` (exit 1 with a clear error if both are passed).

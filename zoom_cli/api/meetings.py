@@ -163,3 +163,138 @@ def list_meetings(
         params={"type": meeting_type},
         page_size=page_size,
     )
+
+
+# ---- registrants surface (Zoom Webinars-style registration on regular --
+# meetings; required when the meeting is set to ``registration_type``) ----
+
+#: Allowed values for ``list_registrants(status=...)``. Mirrors Zoom's
+#: registrant_status filter. Default ``"pending"`` matches Zoom's own
+#: default — the bucket most callers care about (admins approving sign-ups).
+ALLOWED_REGISTRANT_STATUSES: tuple[str, ...] = ("pending", "approved", "denied")
+
+#: Allowed values for ``update_registrant_status(action=...)``.
+#: ``approve`` / ``deny`` move a registrant in or out of the attendee
+#: list; ``cancel`` revokes a previously-approved registration (Zoom
+#: emails the cancellation if the meeting has notifications enabled).
+ALLOWED_REGISTRANT_ACTIONS: tuple[str, ...] = ("approve", "deny", "cancel")
+
+
+def list_registrants(
+    client: ApiClient,
+    meeting_id: str | int,
+    *,
+    status: str = "pending",
+    page_size: int = DEFAULT_PAGE_SIZE,
+) -> Iterator[dict[str, Any]]:
+    """``GET /meetings/{meeting_id}/registrants`` — yield registrants.
+
+    Args:
+        client: Authenticated :class:`ApiClient`.
+        meeting_id: Numeric Zoom meeting ID.
+        status: One of :data:`ALLOWED_REGISTRANT_STATUSES`. Default
+            ``"pending"`` (Zoom's own default — the approval queue).
+        page_size: Items per page; see
+            :data:`~zoom_cli.api.pagination.DEFAULT_PAGE_SIZE`.
+
+    Yields:
+        One registrant dict per record.
+
+    Required scopes: ``meeting:read:meeting`` (or finer-grained
+    ``meeting:read:list_registrants``).
+    """
+    if status not in ALLOWED_REGISTRANT_STATUSES:
+        raise ValueError(f"status must be one of {ALLOWED_REGISTRANT_STATUSES!r}, got {status!r}")
+    return paginate(
+        client,
+        f"/meetings/{quote(str(meeting_id), safe='')}/registrants",
+        item_key="registrants",
+        params={"status": status},
+        page_size=page_size,
+    )
+
+
+def add_registrant(
+    client: ApiClient, meeting_id: str | int, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """``POST /meetings/{meeting_id}/registrants`` — register an attendee.
+
+    ``payload`` must contain at minimum ``email`` and ``first_name``;
+    Zoom accepts the full registration form (``last_name``, ``address``,
+    ``city``, ``country``, ``phone``, ``industry``, custom_questions, …).
+
+    Returns Zoom's response object including ``registrant_id``,
+    ``join_url`` (with the registration token baked in), and the
+    deduced ``id``. The CLI surfaces ``join_url`` since that's the
+    actionable thing to send to the attendee.
+
+    Required scopes: ``meeting:write:registrant``.
+    """
+    return client.post(f"/meetings/{quote(str(meeting_id), safe='')}/registrants", json=payload)
+
+
+def update_registrant_status(
+    client: ApiClient,
+    meeting_id: str | int,
+    *,
+    action: str,
+    registrant_ids: list[str],
+) -> dict[str, Any]:
+    """``PUT /meetings/{meeting_id}/registrants/status`` — bulk-update.
+
+    Args:
+        client: Authenticated :class:`ApiClient`.
+        meeting_id: Numeric Zoom meeting ID.
+        action: One of :data:`ALLOWED_REGISTRANT_ACTIONS`.
+        registrant_ids: Zoom registrant IDs (the ``id`` field, not the
+            registrant's email). Must be non-empty.
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Refusing an empty ``registrant_ids`` here turns a silent no-op into
+    a fast local error — easier to debug than "the API call returned
+    success but nothing changed."
+
+    Required scopes: ``meeting:write:registrant``.
+    """
+    if action not in ALLOWED_REGISTRANT_ACTIONS:
+        raise ValueError(f"action must be one of {ALLOWED_REGISTRANT_ACTIONS!r}, got {action!r}")
+    if not registrant_ids:
+        raise ValueError("registrant_ids must contain at least one ID")
+    return client.put(
+        f"/meetings/{quote(str(meeting_id), safe='')}/registrants/status",
+        json={"action": action, "registrants": [{"id": rid} for rid in registrant_ids]},
+    )
+
+
+def get_registration_questions(client: ApiClient, meeting_id: str | int) -> dict[str, Any]:
+    """``GET /meetings/{meeting_id}/registrants/questions`` — fetch the
+    registration form schema (standard + custom questions).
+
+    Returns the full questions envelope so the caller can round-trip it
+    through ``update_registration_questions`` after editing.
+
+    Required scopes: ``meeting:read:meeting``.
+    """
+    return client.get(f"/meetings/{quote(str(meeting_id), safe='')}/registrants/questions")
+
+
+def update_registration_questions(
+    client: ApiClient, meeting_id: str | int, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """``PATCH /meetings/{meeting_id}/registrants/questions`` — replace
+    the registration form's questions.
+
+    Note: Zoom's "PATCH" here is closer to a PUT — the ``questions``
+    array is replaced wholesale, not merged. Round-trip through
+    ``get_registration_questions`` to pick up the existing shape, edit,
+    then submit.
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``meeting:write:meeting``.
+    """
+    return client.patch(
+        f"/meetings/{quote(str(meeting_id), safe='')}/registrants/questions",
+        json=payload,
+    )

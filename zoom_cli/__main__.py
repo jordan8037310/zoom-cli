@@ -1241,6 +1241,238 @@ def meetings_end(meeting_id, yes):
     click.echo(f"Ended meeting {meeting_id}.")
 
 
+# ---- Meeting registrants (depth-completion follow-up to #13) -----------
+
+
+@meetings_cmd.group(
+    "registrants",
+    help="Manage attendee registrations on a meeting (requires meeting registration enabled).",
+)
+def meetings_registrants_cmd():
+    """Group for ``zoom meetings registrants ...``."""
+
+
+@meetings_registrants_cmd.command(
+    "list",
+    help="List registrants for a meeting (paginates GET /meetings/<id>/registrants).",
+)
+@click.argument("meeting_id")
+@click.option(
+    "--status",
+    type=click.Choice(list(meetings.ALLOWED_REGISTRANT_STATUSES)),
+    default="pending",
+    show_default=True,
+    help="Filter by registration status.",
+)
+@click.option(
+    "--page-size",
+    type=click.IntRange(1, 300),
+    default=300,
+    show_default=True,
+    help="Items per page request.",
+)
+@_translate_keyring_errors
+def meetings_registrants_list(meeting_id, status, page_size):
+    """Output is tab-separated (id\\temail\\tfirst_name\\tlast_name\\tstatus)."""
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            click.echo("id\temail\tfirst_name\tlast_name\tstatus")
+            for r in meetings.list_registrants(
+                client, meeting_id, status=status, page_size=page_size
+            ):
+                click.echo(
+                    f"{r.get('id', '')}\t"
+                    f"{r.get('email', '')}\t"
+                    f"{r.get('first_name', '')}\t"
+                    f"{r.get('last_name', '')}\t"
+                    f"{r.get('status', '')}"
+                )
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+
+
+@meetings_registrants_cmd.command(
+    "add",
+    help="Register an attendee on a meeting (POST /meetings/<id>/registrants).",
+)
+@click.argument("meeting_id")
+@click.option(
+    "--from-json",
+    "from_json",
+    type=click.File("r", encoding="utf-8"),
+    default=None,
+    help=(
+        "Read the full registration body from a JSON file (or '-' for stdin). "
+        "Use this for custom_questions and the long form fields the per-field "
+        "flags don't expose. Mutually exclusive with --email / --first-name / --last-name."
+    ),
+)
+@click.option("--email", help="Registrant email (required unless --from-json).")
+@click.option("--first-name", help="Registrant first name (required unless --from-json).")
+@click.option("--last-name", help="Registrant last name (optional).")
+@_translate_keyring_errors
+def meetings_registrants_add(meeting_id, from_json, email, first_name, last_name):
+    """Two payload-construction modes (mirrors meetings create / users settings update):
+
+    1. Per-field flags — ``--email`` and ``--first-name`` required.
+    2. ``--from-json FILE`` — full Zoom registration body.
+    """
+    field_flags = (email, first_name, last_name)
+    any_field_flag = any(f is not None for f in field_flags)
+
+    if from_json is not None:
+        if any_field_flag:
+            click.echo(
+                "--from-json is mutually exclusive with --email / --first-name / --last-name.",
+                err=True,
+            )
+            raise click.exceptions.Exit(code=1)
+        payload = _load_json_payload_or_exit(from_json, label="--from-json input")
+    else:
+        if not email or not first_name:
+            click.echo(
+                "Either (--email AND --first-name) or --from-json is required.",
+                err=True,
+            )
+            raise click.exceptions.Exit(code=1)
+        payload = {"email": email, "first_name": first_name}
+        if last_name:
+            payload["last_name"] = last_name
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            result = meetings.add_registrant(client, meeting_id, payload)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Registered. id: {result.get('registrant_id', result.get('id', ''))}")
+    if "join_url" in result:
+        click.echo(f"join_url: {result['join_url']}")
+
+
+def _registrant_status_action(action: str, action_past: str):
+    """Build one of the ``approve`` / ``deny`` / ``cancel`` subcommands.
+
+    Factored out because the three commands differ only in the verb,
+    confirmation copy, and action token sent to Zoom — extracting the
+    shared shape keeps the three command bodies one-liners.
+    """
+
+    @meetings_registrants_cmd.command(
+        action,
+        help=f"{action.capitalize()} one or more registrants (PUT /meetings/<id>/registrants/status).",
+    )
+    @click.argument("meeting_id")
+    @click.option(
+        "--registrant",
+        "registrant_ids",
+        multiple=True,
+        required=True,
+        help="Registrant ID. Repeat for bulk action.",
+    )
+    @click.option(
+        "--yes",
+        "-y",
+        is_flag=True,
+        default=False,
+        help="Skip the confirmation prompt.",
+    )
+    @_translate_keyring_errors
+    def _cmd(meeting_id, registrant_ids, yes):
+        ids = list(registrant_ids)
+        if not yes and not click.confirm(
+            f"{action.capitalize()} {len(ids)} registrant(s) on meeting {meeting_id}?",
+            default=False,
+        ):
+            click.echo("Aborted.")
+            return
+        creds = _load_creds_or_exit()
+        try:
+            with _build_api_client(creds) as client:
+                meetings.update_registrant_status(
+                    client, meeting_id, action=action, registrant_ids=ids
+                )
+        except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+            _exit_on_api_error(exc)
+        click.echo(f"{action_past} {len(ids)} registrant(s) on meeting {meeting_id}.")
+
+    _cmd.__name__ = f"meetings_registrants_{action}"
+    return _cmd
+
+
+_meetings_registrants_approve = _registrant_status_action("approve", "Approved")
+_meetings_registrants_deny = _registrant_status_action("deny", "Denied")
+_meetings_registrants_cancel = _registrant_status_action("cancel", "Cancelled")
+
+
+@meetings_registrants_cmd.group(
+    "questions",
+    help="Manage the registration form (custom questions) for a meeting.",
+)
+def meetings_registrants_questions_cmd():
+    """Group for ``zoom meetings registrants questions ...``."""
+
+
+@meetings_registrants_questions_cmd.command(
+    "get",
+    help="Print the registration form's questions as JSON (GET .../registrants/questions).",
+)
+@click.argument("meeting_id")
+@_translate_keyring_errors
+def meetings_registrants_questions_get(meeting_id):
+    """Output is the raw JSON envelope so it round-trips cleanly through
+    ``... questions update --from-json -``."""
+    import json as _json
+
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            data = meetings.get_registration_questions(client, meeting_id)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(_json.dumps(data, indent=2))
+
+
+@meetings_registrants_questions_cmd.command(
+    "update",
+    help="Replace the registration form's questions (PATCH .../registrants/questions).",
+)
+@click.argument("meeting_id")
+@click.option(
+    "--from-json",
+    "from_json",
+    type=click.File("r", encoding="utf-8"),
+    required=True,
+    help="Read the full questions payload from a JSON file (or '-' for stdin).",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    default=False,
+    help="Skip the confirmation prompt.",
+)
+@_translate_keyring_errors
+def meetings_registrants_questions_update(meeting_id, from_json, yes):
+    """Zoom replaces the questions array wholesale, not merge — round-trip
+    via ``questions get`` first to pick up the existing shape, then edit."""
+    payload = _load_json_payload_or_exit(from_json, label="--from-json input")
+    if not yes and not click.confirm(
+        f"Replace registration questions on meeting {meeting_id}?",
+        default=False,
+    ):
+        click.echo("Aborted.")
+        return
+    creds = _load_creds_or_exit()
+    try:
+        with _build_api_client(creds) as client:
+            meetings.update_registration_questions(client, meeting_id, payload)
+    except (oauth.ZoomAuthError, ZoomApiError, httpx.HTTPError) as exc:
+        _exit_on_api_error(exc)
+    click.echo(f"Updated registration questions for meeting {meeting_id}.")
+
+
 # ---- Zoom Cloud Recordings ----------------------------------------------
 #
 # Closes #15. Same confirmation-flow design as `meetings delete`:

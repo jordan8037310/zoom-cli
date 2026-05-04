@@ -1409,6 +1409,289 @@ def test_meetings_end_yes_skips_confirmation(
     assert "Ended meeting 12345" in result.output
 
 
+# ---- meeting registrants (depth-completion follow-up to #13) ------------
+
+
+def test_meetings_registrants_list_prints_tsv(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, meeting_id, *, status, page_size):
+        assert meeting_id == "12345"
+        assert status == "pending"
+        return iter(
+            [
+                {
+                    "id": "r-1",
+                    "email": "a@e.com",
+                    "first_name": "A",
+                    "last_name": "Z",
+                    "status": "pending",
+                },
+                {
+                    "id": "r-2",
+                    "email": "b@e.com",
+                    "first_name": "B",
+                    "last_name": "Y",
+                    "status": "pending",
+                },
+            ]
+        )
+
+    _patch_meetings_module(monkeypatch, list_registrants=fake_list)
+    result = runner.invoke(main, ["meetings", "registrants", "list", "12345"])
+    assert result.exit_code == 0, result.output
+    assert "id\temail\tfirst_name\tlast_name\tstatus" in result.output
+    assert "r-1\ta@e.com\tA\tZ\tpending" in result.output
+    assert "r-2\tb@e.com\tB\tY\tpending" in result.output
+
+
+def test_meetings_registrants_list_forwards_status(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_list(_client, _meeting_id, *, status, page_size):
+        captured["status"] = status
+        return iter([])
+
+    _patch_meetings_module(monkeypatch, list_registrants=fake_list)
+    result = runner.invoke(
+        main, ["meetings", "registrants", "list", "12345", "--status", "approved"]
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["status"] == "approved"
+
+
+def test_meetings_registrants_add_field_flags_build_payload(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_add(_client, meeting_id, payload):
+        captured["meeting_id"] = meeting_id
+        captured["payload"] = payload
+        return {"registrant_id": "rid-1", "join_url": "https://zoom.us/w/12345?tk=xyz"}
+
+    _patch_meetings_module(monkeypatch, add_registrant=fake_add)
+    result = runner.invoke(
+        main,
+        [
+            "meetings",
+            "registrants",
+            "add",
+            "12345",
+            "--email",
+            "a@e.com",
+            "--first-name",
+            "A",
+            "--last-name",
+            "Z",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["meeting_id"] == "12345"
+    assert captured["payload"] == {
+        "email": "a@e.com",
+        "first_name": "A",
+        "last_name": "Z",
+    }
+    assert "rid-1" in result.output
+    assert "https://zoom.us/w/12345?tk=xyz" in result.output
+
+
+def test_meetings_registrants_add_requires_email_and_first_name(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    _patch_meetings_module(monkeypatch, add_registrant=lambda *_a, **_k: {})
+    result = runner.invoke(main, ["meetings", "registrants", "add", "12345", "--email", "a@e.com"])
+    assert result.exit_code == 1
+    assert "--email" in result.output and "--first-name" in result.output
+
+
+def test_meetings_registrants_add_from_json_sends_full_payload(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "reg.json"
+    json_file.write_text(
+        '{"email": "a@e.com", "first_name": "A", "custom_questions": '
+        '[{"title": "Company", "value": "Acme"}]}'
+    )
+    captured: dict[str, object] = {}
+
+    def fake_add(_client, _meeting_id, payload):
+        captured["payload"] = payload
+        return {"registrant_id": "rid-2"}
+
+    _patch_meetings_module(monkeypatch, add_registrant=fake_add)
+    result = runner.invoke(
+        main,
+        ["meetings", "registrants", "add", "12345", "--from-json", str(json_file)],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["payload"] == {
+        "email": "a@e.com",
+        "first_name": "A",
+        "custom_questions": [{"title": "Company", "value": "Acme"}],
+    }
+
+
+def test_meetings_registrants_add_from_json_mutually_exclusive(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "reg.json"
+    json_file.write_text('{"email": "a@e.com", "first_name": "A"}')
+    _patch_meetings_module(monkeypatch, add_registrant=lambda *_a, **_k: {})
+    result = runner.invoke(
+        main,
+        [
+            "meetings",
+            "registrants",
+            "add",
+            "12345",
+            "--from-json",
+            str(json_file),
+            "--email",
+            "b@e.com",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "mutually exclusive" in result.output
+
+
+@pytest.mark.parametrize(
+    "subcmd,expected_action,past",
+    [
+        ("approve", "approve", "Approved"),
+        ("deny", "deny", "Denied"),
+        ("cancel", "cancel", "Cancelled"),
+    ],
+)
+def test_meetings_registrants_status_actions_send_correct_action(
+    runner: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    subcmd: str,
+    expected_action: str,
+    past: str,
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_update(_client, meeting_id, *, action, registrant_ids):
+        captured["meeting_id"] = meeting_id
+        captured["action"] = action
+        captured["registrant_ids"] = list(registrant_ids)
+        return {}
+
+    _patch_meetings_module(monkeypatch, update_registrant_status=fake_update)
+    result = runner.invoke(
+        main,
+        [
+            "meetings",
+            "registrants",
+            subcmd,
+            "12345",
+            "--registrant",
+            "r-1",
+            "--registrant",
+            "r-2",
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["action"] == expected_action
+    assert captured["registrant_ids"] == ["r-1", "r-2"]
+    assert past in result.output
+
+
+def test_meetings_registrants_approve_confirms_before_acting(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without --yes, an explicit 'n' aborts and the API is not called."""
+    _save_creds()
+    called = {"n": 0}
+
+    def fake_update(*_a, **_k):
+        called["n"] += 1
+        return {}
+
+    _patch_meetings_module(monkeypatch, update_registrant_status=fake_update)
+    result = runner.invoke(
+        main,
+        [
+            "meetings",
+            "registrants",
+            "approve",
+            "12345",
+            "--registrant",
+            "r-1",
+        ],
+        input="n\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    assert called["n"] == 0
+
+
+def test_meetings_registrants_questions_get_prints_json(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    payload = {
+        "questions": [{"field_name": "city", "required": True}],
+        "custom_questions": [],
+    }
+
+    def fake_get(_client, meeting_id):
+        assert meeting_id == "12345"
+        return payload
+
+    _patch_meetings_module(monkeypatch, get_registration_questions=fake_get)
+    result = runner.invoke(main, ["meetings", "registrants", "questions", "get", "12345"])
+    assert result.exit_code == 0, result.output
+    # Parses back as JSON cleanly — the round-trip property the help text promises.
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert parsed == payload
+
+
+def test_meetings_registrants_questions_update_yes_calls_patch(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "q.json"
+    json_file.write_text('{"questions": [{"field_name": "country", "required": false}]}')
+    captured: dict[str, object] = {}
+
+    def fake_update(_client, meeting_id, payload):
+        captured["meeting_id"] = meeting_id
+        captured["payload"] = payload
+
+    _patch_meetings_module(monkeypatch, update_registration_questions=fake_update)
+    result = runner.invoke(
+        main,
+        [
+            "meetings",
+            "registrants",
+            "questions",
+            "update",
+            "12345",
+            "--from-json",
+            str(json_file),
+            "--yes",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["payload"] == {"questions": [{"field_name": "country", "required": False}]}
+
+
 # ---- #14 (write): zoom users create / delete / settings get -------------
 
 
