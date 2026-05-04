@@ -2209,6 +2209,204 @@ def test_meetings_past_participants_prints_tsv(
     assert "p-2\tBob\tb@e.com\tT3\tT4" in result.output
 
 
+# ---- survey + token + batch register + control (depth-completion) ------
+
+
+def test_meetings_survey_get_prints_json(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    payload = {"questions": [{"name": "Rating", "type": "single"}]}
+
+    def fake_get(_client, mid):
+        assert mid == "12345"
+        return payload
+
+    _patch_meetings_module(monkeypatch, get_survey=fake_get)
+    result = runner.invoke(main, ["meetings", "survey", "get", "12345"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    assert _json.loads(result.output) == payload
+
+
+def test_meetings_survey_update_yes_calls_patch(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "s.json"
+    json_file.write_text('{"questions": [{"name": "Rating"}], "show_in_browser": true}')
+    captured: dict[str, object] = {}
+
+    def fake_update(_client, mid, payload):
+        captured["mid"] = mid
+        captured["payload"] = payload
+
+    _patch_meetings_module(monkeypatch, update_survey=fake_update)
+    result = runner.invoke(
+        main,
+        ["meetings", "survey", "update", "12345", "--from-json", str(json_file), "--yes"],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["mid"] == "12345"
+    assert captured["payload"] == {
+        "questions": [{"name": "Rating"}],
+        "show_in_browser": True,
+    }
+    assert "Updated survey" in result.output
+
+
+def test_meetings_survey_update_confirms_and_aborts(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "s.json"
+    json_file.write_text("{}")
+    called = {"n": 0}
+    _patch_meetings_module(
+        monkeypatch, update_survey=lambda *_a, **_k: called.__setitem__("n", called["n"] + 1)
+    )
+    result = runner.invoke(
+        main,
+        ["meetings", "survey", "update", "12345", "--from-json", str(json_file)],
+        input="n\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    assert called["n"] == 0
+
+
+def test_meetings_survey_delete_yes_calls_api(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_delete(_client, mid):
+        captured["mid"] = mid
+
+    _patch_meetings_module(monkeypatch, delete_survey=fake_delete)
+    result = runner.invoke(main, ["meetings", "survey", "delete", "12345", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert captured["mid"] == "12345"
+    assert "Deleted survey" in result.output
+
+
+def test_meetings_token_default_zak(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_token(_client, mid, *, token_type):
+        captured["mid"] = mid
+        captured["type"] = token_type
+        return {"token": "abc.def.ghi"}
+
+    _patch_meetings_module(monkeypatch, get_token=fake_token)
+    result = runner.invoke(main, ["meetings", "token", "12345"])
+    assert result.exit_code == 0, result.output
+    assert captured["type"] == "zak"
+    assert "abc.def.ghi" in result.output
+
+
+def test_meetings_token_forwards_type(runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    _save_creds()
+    captured: dict[str, object] = {}
+
+    def fake_token(_client, _mid, *, token_type):
+        captured["type"] = token_type
+        return {"token": "x"}
+
+    _patch_meetings_module(monkeypatch, get_token=fake_token)
+    result = runner.invoke(main, ["meetings", "token", "12345", "--type", "zpk"])
+    assert result.exit_code == 0, result.output
+    assert captured["type"] == "zpk"
+
+
+def test_meetings_registrants_batch_sends_payload(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "batch.json"
+    json_file.write_text(
+        '{"auto_approve": true, "registrants": ['
+        '{"email": "a@e.com", "first_name": "A"}, '
+        '{"email": "b@e.com", "first_name": "B"}]}'
+    )
+    captured: dict[str, object] = {}
+
+    def fake_batch(_client, mid, payload):
+        captured["mid"] = mid
+        captured["payload"] = payload
+        return {
+            "registrants": [
+                {"email": "a@e.com", "join_url": "https://zoom.us/w/12345?tk=A"},
+                {"email": "b@e.com", "join_url": "https://zoom.us/w/12345?tk=B"},
+            ]
+        }
+
+    _patch_meetings_module(monkeypatch, batch_register=fake_batch)
+    result = runner.invoke(
+        main,
+        [
+            "meetings",
+            "registrants",
+            "batch",
+            "12345",
+            "--from-json",
+            str(json_file),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["mid"] == "12345"
+    assert len(captured["payload"]["registrants"]) == 2  # type: ignore[index]
+    assert "Registered 2 attendee(s)" in result.output
+
+
+def test_meetings_control_yes_sends_payload(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "ctrl.json"
+    json_file.write_text('{"method": "invite", "params": {"contacts": [{"email": "a@e.com"}]}}')
+    captured: dict[str, object] = {}
+
+    def fake_ctrl(_client, mid, payload):
+        captured["mid"] = mid
+        captured["payload"] = payload
+
+    _patch_meetings_module(monkeypatch, in_meeting_control=fake_ctrl)
+    result = runner.invoke(
+        main,
+        ["meetings", "control", "12345", "--from-json", str(json_file), "--yes"],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["mid"] == "12345"
+    assert captured["payload"]["method"] == "invite"  # type: ignore[index]
+    assert "Sent in-meeting control 'invite'" in result.output
+
+
+def test_meetings_control_confirms_and_aborts(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _save_creds()
+    json_file = tmp_path / "ctrl.json"
+    json_file.write_text('{"method": "mute_participants", "params": {}}')
+    called = {"n": 0}
+    _patch_meetings_module(
+        monkeypatch,
+        in_meeting_control=lambda *_a, **_k: called.__setitem__("n", called["n"] + 1),
+    )
+    result = runner.invoke(
+        main,
+        ["meetings", "control", "12345", "--from-json", str(json_file)],
+        input="n\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+    assert "mute_participants" in result.output  # confirmation surfaced the verb
+    assert called["n"] == 0
+
+
 # ---- #14 (write): zoom users create / delete / settings get -------------
 
 

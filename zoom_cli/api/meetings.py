@@ -538,3 +538,120 @@ def recover_meeting(client: ApiClient, meeting_id: str | int) -> dict[str, Any]:
         f"/meetings/{quote(str(meeting_id), safe='')}/status",
         json={"action": "recover"},
     )
+
+
+# ---- post-meeting survey ------------------------------------------------
+
+
+def get_survey(client: ApiClient, meeting_id: str | int) -> dict[str, Any]:
+    """``GET /meetings/{meeting_id}/survey`` — fetch the post-meeting
+    survey config (questions + display options).
+
+    Required scopes: ``meeting:read:meeting``.
+    """
+    return client.get(f"/meetings/{quote(str(meeting_id), safe='')}/survey")
+
+
+def update_survey(
+    client: ApiClient, meeting_id: str | int, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """``PATCH /meetings/{meeting_id}/survey`` — replace survey config.
+
+    ``payload`` accepts ``questions``, ``custom_survey``,
+    ``show_in_browser``, ``third_party_survey`` (for external survey
+    URLs). Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``meeting:write:meeting``.
+    """
+    return client.patch(f"/meetings/{quote(str(meeting_id), safe='')}/survey", json=payload)
+
+
+def delete_survey(client: ApiClient, meeting_id: str | int) -> dict[str, Any]:
+    """``DELETE /meetings/{meeting_id}/survey`` — remove the survey.
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``meeting:write:meeting``.
+    """
+    return client.delete(f"/meetings/{quote(str(meeting_id), safe='')}/survey")
+
+
+# ---- meeting token (ZAK / ZPK) -----------------------------------------
+
+#: Allowed values for ``get_token(token_type=...)``. Zoom's ``type``
+#: query param. ``zak`` is the start-meeting token (most common);
+#: ``zpk`` is the host-presence token used by some embed flows.
+ALLOWED_TOKEN_TYPES: tuple[str, ...] = ("zak", "zpk")
+
+
+def get_token(
+    client: ApiClient,
+    meeting_id: str | int,
+    *,
+    token_type: str = "zak",  # noqa: S107 — "zak" is Zoom's token-type enum value, not a credential
+) -> dict[str, Any]:
+    """``GET /meetings/{meeting_id}/token`` — fetch a JWT-style token
+    used to start the meeting on the host's behalf.
+
+    Args:
+        client: Authenticated :class:`ApiClient`.
+        meeting_id: Numeric Zoom meeting ID.
+        token_type: One of :data:`ALLOWED_TOKEN_TYPES`. Default
+            ``"zak"`` mirrors Zoom's own default (the start-meeting
+            token used by SDK embeds).
+
+    Returns ``{token: str}``. The value is sensitive — anyone with it
+    can start the meeting as the host.
+
+    Required scopes: ``meeting:read:meeting`` (or admin equivalent).
+    """
+    if token_type not in ALLOWED_TOKEN_TYPES:
+        raise ValueError(f"token_type must be one of {ALLOWED_TOKEN_TYPES!r}, got {token_type!r}")
+    return client.get(
+        f"/meetings/{quote(str(meeting_id), safe='')}/token",
+        params={"type": token_type},
+    )
+
+
+# ---- bulk registration --------------------------------------------------
+
+
+def batch_register(
+    client: ApiClient, meeting_id: str | int, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """``POST /meetings/{meeting_id}/batch_registrants`` — register up
+    to 30 attendees in one call.
+
+    ``payload`` should contain ``registrants`` (an array of
+    ``{email, first_name, last_name?}`` dicts) plus optional
+    ``auto_approve`` (default false) and
+    ``registrants_confirmation_email`` (default true). Returns Zoom's
+    bulk response with a ``registrants`` array — one entry per accepted
+    registrant including the per-attendee ``join_url``.
+
+    Required scopes: ``meeting:write:registrant``.
+    """
+    return client.post(
+        f"/meetings/{quote(str(meeting_id), safe='')}/batch_registrants",
+        json=payload,
+    )
+
+
+# ---- in-meeting control (live actions) ---------------------------------
+
+
+def in_meeting_control(
+    client: ApiClient, meeting_id: str | int, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """``PATCH /live_meetings/{meeting_id}/events`` — perform an in-
+    meeting action (invite, mute_participants, etc.).
+
+    ``payload`` is ``{method: <action>, params: {...}}``. Note this
+    endpoint lives under the separate ``/live_meetings`` namespace
+    (not ``/meetings``) — different scopes apply.
+
+    Returns ``{}`` (Zoom responds with 204 No Content).
+
+    Required scopes: ``meeting:control:in_meeting`` or admin.
+    """
+    return client.patch(f"/live_meetings/{quote(str(meeting_id), safe='')}/events", json=payload)
