@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Binary name**: `pipx install` now puts `zoom` on PATH (was `zoom_cli`). The `[project.scripts]` entry in `pyproject.toml` was misnamed, breaking every doc command that called `zoom ...`. Re-install with `pipx install --force ...` (or `pipx upgrade zoom_cli`) to pick up the new entrypoint.
+
+### Changed
+- README install snippet now points at the `develop` branch (`git+https://github.com/jordan8037310/zoom-cli.git@develop`) — that's where every depth-completion feature lands first; `main` cuts releases periodically.
+
 > Bootstrap PR: [#25](https://github.com/jordan8037310/zoom-cli/pull/25) — closes #4, #7, #8 and partially addresses #9, #10.
 > Codex review follow-ups (PR #32): closes #34, #35, #36, #37, #38, #39, #40, #41, #42, #43, #44, #45, #46, #47.
 > CC security setup (PR #33): adds `.claude/settings.json`, `SECURITY.md`, `LOCAL-SECURITY.md`, `TASKS.md`, and three FACET developer skills.

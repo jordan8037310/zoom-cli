@@ -54,7 +54,7 @@ codegen = [
 ]
 
 [project.scripts]
-zoom_cli = "zoom_cli.__main__:main"
+zoom = "zoom_cli.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/jordan8037310/zoom-cli"
