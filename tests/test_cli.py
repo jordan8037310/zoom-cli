@@ -5534,3 +5534,184 @@ def test_output_json_dashboard_meetings_list_emits_json_array(
 
     parsed = _json.loads(result.output)
     assert parsed[0]["participants"] == 3
+
+
+# ---- --output json (phase 4: depth-completion subgroups) ---------------
+
+
+def test_output_json_meetings_registrants_list_emits_json_array(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, mid, *, status, page_size):
+        return iter(
+            [
+                {
+                    "id": "r-1",
+                    "email": "a@e.com",
+                    "first_name": "A",
+                    "last_name": "Z",
+                    "status": "pending",
+                },
+            ]
+        )
+
+    _patch_meetings_module(monkeypatch, list_registrants=fake_list)
+    result = runner.invoke(main, ["--output", "json", "meetings", "registrants", "list", "12345"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert parsed[0]["id"] == "r-1"
+
+
+def test_output_json_meetings_polls_list_emits_json_array(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, mid):
+        return {
+            "polls": [
+                {"id": "p-1", "title": "Q1", "status": "started", "anonymous": False},
+            ]
+        }
+
+    _patch_meetings_module(monkeypatch, list_polls=fake_list)
+    result = runner.invoke(main, ["--output", "json", "meetings", "polls", "list", "12345"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert parsed[0]["title"] == "Q1"
+
+
+def test_output_json_meetings_past_instances_emits_json_array(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_inst(_client, mid):
+        return {"meetings": [{"uuid": "u-1", "start_time": "T1"}]}
+
+    _patch_meetings_module(monkeypatch, list_past_instances=fake_inst)
+    result = runner.invoke(main, ["--output", "json", "meetings", "past", "instances", "12345"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert parsed[0]["uuid"] == "u-1"
+
+
+def test_output_json_meetings_past_get_emits_json_object(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+    payload = {
+        "uuid": "u-1",
+        "id": 12345,
+        "topic": "T",
+        "duration": 30,
+        "extra_field": "kept-in-json",
+    }
+
+    def fake_get(_client, mid):
+        return payload
+
+    _patch_meetings_module(monkeypatch, get_past_meeting=fake_get)
+    result = runner.invoke(main, ["--output", "json", "meetings", "past", "get", "u-1"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    assert _json.loads(result.output) == payload
+
+
+def test_output_json_users_schedulers_list_emits_json_array(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, uid):
+        return {"schedulers": [{"id": "s-1", "email": "a@e.com"}]}
+
+    _patch_users_module(monkeypatch, list_schedulers=fake_list)
+    result = runner.invoke(main, ["--output", "json", "users", "schedulers", "list", "u-1"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert parsed[0]["email"] == "a@e.com"
+
+
+def test_output_json_users_vb_list_emits_json_array(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, uid, *, page_size):
+        return iter(
+            [
+                {
+                    "id": "vb-1",
+                    "name": "office.jpg",
+                    "type": "image",
+                    "size": 12345,
+                    "is_default": True,
+                }
+            ]
+        )
+
+    _patch_users_module(monkeypatch, list_virtual_backgrounds=fake_list)
+    result = runner.invoke(
+        main, ["--output", "json", "users", "virtual-backgrounds", "list", "u-1"]
+    )
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert parsed[0]["is_default"] is True
+
+
+def test_output_json_recordings_registrants_list_emits_json_array(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, mid, *, status, page_size):
+        return iter(
+            [
+                {
+                    "id": "r-1",
+                    "email": "a@e.com",
+                    "first_name": "A",
+                    "last_name": "Z",
+                    "status": "pending",
+                },
+            ]
+        )
+
+    _patch_recordings_module(monkeypatch, list_recording_registrants=fake_list)
+    result = runner.invoke(main, ["--output", "json", "recordings", "registrants", "list", "12345"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert parsed[0]["id"] == "r-1"
+
+
+def test_output_json_recordings_archive_list_emits_json_array(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _save_creds()
+
+    def fake_list(_client, *, from_, to, page_size):
+        return iter([{"id": "a-1", "meeting_id": 100, "topic": "T", "archive_date": "2026-04-29"}])
+
+    _patch_recordings_module(monkeypatch, list_archive_files=fake_list)
+    result = runner.invoke(main, ["--output", "json", "recordings", "archive", "list"])
+    assert result.exit_code == 0, result.output
+    import json as _json
+
+    parsed = _json.loads(result.output)
+    assert parsed[0]["id"] == "a-1"
