@@ -65,13 +65,23 @@ For users without admin marketplace access, `zoom auth login --client-id <id>` r
 
 ## Installation
 
-### macOS / Linux (via PyPI)
+### macOS / Linux (recommended: pipx from `develop`)
+
+The fork's active branch is `develop` — every depth-completion feature lands there first and `main` cuts releases periodically. Install from `develop` to get the full surface:
 
 ```bash
-pip install zoom-cli           # (planned — not yet on PyPI)
-# Or directly from GitHub:
-pip install git+https://github.com/jordan8037310/zoom-cli.git
+# Cleanest: pipx puts the `zoom` binary on your PATH inside an isolated venv
+brew install pipx
+pipx ensurepath
+pipx install "git+https://github.com/jordan8037310/zoom-cli.git@develop"
+
+# To upgrade later (pulls the develop tip and rebuilds):
+pipx upgrade zoom_cli   # (package name; the binary stays `zoom`)
+# or, if --spec is needed to pin the branch again:
+pipx install --force "git+https://github.com/jordan8037310/zoom-cli.git@develop"
 ```
+
+`pip install zoom-cli` (PyPI) is planned but inert — the Trusted Publisher entry isn't registered yet. Until then, use the pipx command above (or `pip install` from GitHub if you don't have pipx).
 
 ### macOS / Linux (legacy Homebrew, upstream)
 
