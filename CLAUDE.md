@@ -66,6 +66,18 @@ When opening a PR, run automated review using:
 - `codex:rescue` (delegate review to Codex for an independent perspective)
 - `fullstack-dev-skills:code-reviewer` (for inline issue triage)
 
+## Canonical API reference (pinned)
+
+The official Zoom REST API documentation lives at:
+
+> **https://developers.zoom.us/docs/api/**
+
+This is the **single source of truth** for endpoint shapes, request/response payloads, scopes, rate-limit tiers, and deprecation notices. Module docstrings in `zoom_cli/api/<surface>.py` reference the per-surface index pages under that root (e.g. `/docs/api/meetings/`, `/docs/api/users/`).
+
+**Pinning policy:** stay on this docs root until the maintainer explicitly approves an update. Older URL patterns like `developers.zoom.us/docs/api/rest/reference/...` predate the current taxonomy and should be normalized to the new `/docs/api/<surface>/` form when encountered. The codegen workflow fetches the OpenAPI spec from `https://developers.zoom.us/openapi-spec/...` (under the same domain) — that link tracks the same canonical source.
+
+If a new endpoint or behaviour seems to be missing from the docs, **flag it in the PR rather than coding around it** — Zoom occasionally ships endpoints that don't appear in the public docs for some time, and we want to leave a paper trail when we rely on undocumented behaviour.
+
 ## Testing rules
 
 - Never write to the user's real `~/.zoom-cli/`. Always monkeypatch `ZOOM_CLI_DIR` and `SAVE_FILE_PATH` in tests, or use the `tmp_zoom_cli_home` fixture from `tests/conftest.py`.

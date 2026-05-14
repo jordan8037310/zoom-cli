@@ -28,7 +28,7 @@ Base URL: `https://api.zoom.us/v2/`. All references below are HTTP method + path
 - `PATCH  /meetings/{meetingId}/livestream` / `PATCH .../livestream/status` — live streaming
 - `GET    /meetings/{meetingId}/jointoken/local_recording` — join token for local recording
 
-### 2.2 Webinars — https://developers.zoom.us/docs/api/webinars/
+### 2.2 Webinars — https://developers.zoom.us/docs/api/events/
 - `GET  /users/{userId}/webinars` / `POST /users/{userId}/webinars`
 - `GET  /webinars/{webinarId}` / `PATCH` / `DELETE`
 - `PUT  /webinars/{webinarId}/status` — end webinar
@@ -83,7 +83,7 @@ Base URL: `https://api.zoom.us/v2/`. All references below are HTTP method + path
 - `GET /metrics/issues/zoomrooms`
 - `GET /metrics/client/feedback`
 
-### 2.7 Team Chat — https://developers.zoom.us/docs/api/rest/reference/chat/methods/
+### 2.7 Team Chat — https://developers.zoom.us/docs/api/chat/
 - `GET    /chat/users/{userId}/channels` / `POST ...`
 - `GET    /chat/channels/{channelId}` / `PATCH` / `DELETE`
 - `GET    /chat/channels/{channelId}/members` / `POST` / `DELETE`
@@ -327,10 +327,10 @@ Each behind opt-in scopes; users add only what their account supports.
 
 - Zoom Developer API Reference — https://developers.zoom.us/docs/api/
 - Meetings APIs — https://developers.zoom.us/docs/api/meetings/
-- Webinars Plus & Events API — https://developers.zoom.us/docs/api/rest/zoom-events-api/
+- Webinars Plus & Events API — https://developers.zoom.us/docs/api/events/
 - Users APIs — https://developers.zoom.us/docs/api/users/
 - Phone APIs — https://developers.zoom.us/docs/api/phone/
-- Chat API methods — https://developers.zoom.us/docs/api/rest/reference/chat/methods/
+- Chat API — https://developers.zoom.us/docs/api/chat/
 - Contact Center APIs — https://developers.zoom.us/docs/api/contact-center/
 - Rate limits — https://developers.zoom.us/docs/api/rate-limits/
 - Using webhooks — https://developers.zoom.us/docs/api/webhooks/

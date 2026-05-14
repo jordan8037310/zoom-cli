@@ -15,24 +15,35 @@ The actual codegen is delegated — this script's job is to:
   3. Drop into ``zoom_cli/api/_generated/`` (gitignored by default —
      teams that want to commit the generated tree can opt in).
 
-The Zoom OpenAPI spec lives at <https://developers.zoom.us/openapi-spec/>.
-This script accepts a local path; it does not bundle the spec because
-it's large (~1.5 MB) and changes frequently — keep it as a fetch-on-
-demand workflow rather than a build artefact.
+Zoom maintains the OpenAPI v2 spec on GitHub at
+<https://github.com/zoom/api>; the raw JSON we feed into the generator
+lives at:
+
+    https://raw.githubusercontent.com/zoom/api/master/openapi.v2.json
+
+This script accepts a local path or ``--from-url``; it does not bundle
+the spec because it's large (~1.5 MB) and changes frequently — keep it
+as a fetch-on-demand workflow rather than a build artefact.
+
+The pinning policy in CLAUDE.md ("Canonical API reference") says we
+stay on these URLs until the maintainer explicitly approves an update.
 
 Optional install: ``pip install -e '.[codegen]'`` (adds
 ``datamodel-code-generator``).
 
 Usage:
 
-    # 1. Fetch the spec (one-time or periodic):
-    curl -o /tmp/zoom-openapi.json https://developers.zoom.us/openapi-spec/...
+    # Option A: --from-url (fetch + generate in one step):
+    python scripts/codegen.py --from-url \
+      https://raw.githubusercontent.com/zoom/api/master/openapi.v2.json
 
-    # 2. Run the generator:
+    # Option B: pre-download then point at the local path:
+    curl -o /tmp/zoom-openapi.json \
+      https://raw.githubusercontent.com/zoom/api/master/openapi.v2.json
     python scripts/codegen.py /tmp/zoom-openapi.json
 
-    # 3. Review the diff in zoom_cli/api/_generated/ and decide what to
-    #    commit (if anything — the generated tree is gitignored by default).
+    # Review the diff in zoom_cli/api/_generated/ and decide what to
+    # commit (if anything — the generated tree is gitignored by default).
 
 What this script does NOT do (deferred to follow-ups):
   - Bundle the spec in the repo (large, fast-moving, not the right place).

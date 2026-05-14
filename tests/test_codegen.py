@@ -236,13 +236,13 @@ def test_main_from_url_fetches_spec(
     rc = codegen.main(
         [
             "--from-url",
-            "https://developers.zoom.us/openapi-spec/api.json",
+            "https://raw.githubusercontent.com/zoom/api/master/openapi.v2.json",
             "--output-dir",
             str(tmp_path / "out"),
         ]
     )
     assert rc == 0
-    assert fetched_url["url"] == "https://developers.zoom.us/openapi-spec/api.json"
+    assert fetched_url["url"] == "https://raw.githubusercontent.com/zoom/api/master/openapi.v2.json"
     # The fetched tempfile path should appear in the codegen invocation.
     assert str(fake_path) in captured_cmd
     out = capsys.readouterr().out
