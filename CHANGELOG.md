@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Binary name**: `pipx install` now puts `zoom` on PATH (was `zoom_cli`). The `[project.scripts]` entry in `pyproject.toml` was misnamed, breaking every doc command that called `zoom ...`. Re-install with `pipx install --force ...` (or `pipx upgrade zoom_cli`) to pick up the new entrypoint.
+- **Codegen / OpenAPI spec URL**: the historical link `https://developers.zoom.us/openapi-spec/` returns 404; the real OpenAPI v2 spec lives at `https://raw.githubusercontent.com/zoom/api/master/openapi.v2.json` (browser view: `github.com/zoom/api`). Updated `scripts/codegen.py` docstring, `README.md` codegen snippet, and `tests/test_codegen.py` fixture URL accordingly.
 
 ### Changed
 - README install snippet now points at the `develop` branch (`git+https://github.com/jordan8037310/zoom-cli.git@develop`) — that's where every depth-completion feature lands first; `main` cuts releases periodically.
+- **Pinned the canonical API reference URL** in `CLAUDE.md`: `https://developers.zoom.us/docs/api/` is the single source of truth for endpoint shapes, scopes, and rate-limit tiers until the maintainer explicitly approves an update. Normalized two stale URL patterns in `docs/comparative-analysis.md` (Team Chat moved from `/docs/api/rest/reference/chat/methods/` to `/docs/api/chat/`; Webinars moved from `/docs/api/webinars/` to `/docs/api/events/` — Zoom merged Webinars into Webinars Plus & Events).
 
 > Bootstrap PR: [#25](https://github.com/jordan8037310/zoom-cli/pull/25) — closes #4, #7, #8 and partially addresses #9, #10.
 > Codex review follow-ups (PR #32): closes #34, #35, #36, #37, #38, #39, #40, #41, #42, #43, #44, #45, #46, #47.

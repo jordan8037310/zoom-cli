@@ -192,10 +192,12 @@ For developers who want statically-typed Pydantic v2 models instead of `dict[str
 pip install -e '.[codegen]'
 
 # Option A: fetch + generate in one step
-python scripts/codegen.py --from-url https://developers.zoom.us/openapi-spec/...
+python scripts/codegen.py --from-url \
+  https://raw.githubusercontent.com/zoom/api/master/openapi.v2.json
 
 # Option B: fetch separately (useful if you want to inspect / edit the spec first)
-curl -o /tmp/zoom-openapi.json https://developers.zoom.us/openapi-spec/...
+curl -o /tmp/zoom-openapi.json \
+  https://raw.githubusercontent.com/zoom/api/master/openapi.v2.json
 python scripts/codegen.py /tmp/zoom-openapi.json
 
 # Or `--dry-run` against either path to inspect the invocation first.
